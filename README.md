@@ -269,6 +269,6 @@ Special thanks to the authors and open-source contributors of the following foun
 ---
 
 ## 👤 Author & Academic Context
-* **Project:** Tugas Akhir SIADIT (Undergraduate Thesis Research)
+* **Project:** (Undergraduate Thesis Research)
 * **Author:** Aditya ([@adityanhh](https://github.com/adityanhh))
 * **Domain:** Computer Vision, Deep Learning, Intelligent Transportation Systems (ITS)
