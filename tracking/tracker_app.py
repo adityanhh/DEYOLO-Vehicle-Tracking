@@ -1,0 +1,367 @@
+"""
+DEYOLO Vehicle Tracking — Dedicated Streamlit App
+==================================================
+Aplikasi Web UI khusus untuk Pelacakan Video Kendaraan (Tracking).
+
+Cara jalankan:
+    streamlit run tracking/tracker_app.py
+"""
+
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+import sys
+import time
+import shutil
+import tempfile
+import subprocess
+import traceback
+from pathlib import Path
+
+import streamlit as st
+import cv2
+import numpy as np
+import torch
+
+# Pastikan root workspace terdaftar di sys.path
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from tracking.euclidean_tracker import EuclideanDistTracker
+from tracking.track_video import get_color_for_id, draw_tracks, draw_hud
+
+# ========================= KONFIGURASI MODEL =========================
+MODEL_REGISTRY = {
+    "EXP-05 — DEYOLOn (3x3, r8, Sobel) [Best F1]": {
+        "path": "weights/exp05_best.pt",
+        "dual_input": True,
+        "pseudo_ir_method": "sobel",
+    },
+    "EXP-07 — DEYOLOn (3x3, r8, CLAHE+Sobel) [Best Precision]": {
+        "path": "weights/exp07_best.pt",
+        "dual_input": True,
+        "pseudo_ir_method": "clahe",
+    },
+    "EXP-02 — DEYOLOn-Default (3x7, r16, Sobel)": {
+        "path": "weights/exp02_best.pt",
+        "dual_input": True,
+        "pseudo_ir_method": "sobel",
+    },
+    "EXP-03 — DEYOLOn (3x7, r16, CLAHE)": {
+        "path": "weights/exp03_best.pt",
+        "dual_input": True,
+        "pseudo_ir_method": "clahe",
+    },
+    "EXP-06 — DEYOLOn (3x3, r16, Sobel)": {
+        "path": "weights/exp06_best.pt",
+        "dual_input": True,
+        "pseudo_ir_method": "sobel",
+    },
+    "EXP-01 — Baseline (YOLOv8n)": {
+        "path": "weights/baseline_best.pt",
+        "dual_input": False,
+        "pseudo_ir_method": None,
+    },
+}
+
+CONF_THRESHOLD_DEFAULT = 0.25
+IOU_THRESHOLD_DEFAULT = 0.70
+# =====================================================================
+
+
+def generate_pseudo_ir(rgb_bgr, method="sobel"):
+    """Generate Pseudo-IR dari frame RGB."""
+    gray = cv2.cvtColor(rgb_bgr, cv2.COLOR_BGR2GRAY)
+
+    if method == "sobel":
+        blur = cv2.GaussianBlur(gray, ksize=(0, 0), sigmaX=2.0, sigmaY=2.0)
+    else:  # clahe
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blur = cv2.GaussianBlur(enhanced, ksize=(5, 5), sigmaX=1.0, sigmaY=1.0)
+
+    grad_x = cv2.Sobel(blur, cv2.CV_64F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(blur, cv2.CV_64F, 0, 1, ksize=3)
+    magnitude = cv2.magnitude(grad_x, grad_y)
+    pseudo_ir = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    return cv2.merge([pseudo_ir] * 3)
+
+
+@st.cache_resource
+def get_model(weights_path):
+    """Load model dengan cache Streamlit."""
+    from ultralytics import YOLO
+    return YOLO(weights_path)
+
+
+def run_inference(model, rgb_img, conf, iou, dual_input, pseudo_ir_img=None):
+    """Jalankan inferensi deteksi pada 1 frame."""
+    with torch.no_grad():
+        if not dual_input:
+            results = model.predict(source=rgb_img, conf=conf, iou=iou, save=False, verbose=False)
+        else:
+            results = model.predict(
+                source=[rgb_img, pseudo_ir_img],
+                conf=conf,
+                iou=iou,
+                save=False,
+                verbose=False,
+            )
+    return results
+
+
+def convert_to_h264(input_video_path, output_video_path):
+    """Konversi video ke format H.264 agar dapat diputar langsung di browser via st.video."""
+    ffmpeg_cmd = shutil.which("ffmpeg") or r"C:\ffmpeg\bin\ffmpeg.EXE"
+    if os.path.exists(ffmpeg_cmd):
+        cmd = [
+            ffmpeg_cmd, "-y",
+            "-i", str(input_video_path),
+            "-vcodec", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-crf", "23",
+            "-preset", "veryfast",
+            str(output_video_path)
+        ]
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            return True
+        except Exception:
+            return False
+    return False
+
+
+# ========================= UI KHUSUS TRACKING =========================
+st.set_page_config(
+    page_title="DEYOLO Vehicle Tracking App",
+    page_icon="🎥",
+    layout="wide"
+)
+
+st.title("🎥 DEYOLO Vehicle Tracking App (Euclidean Distance)")
+st.caption("Aplikasi Khusus Pelacakan Video Kendaraan & Analisis Traffic Menggunakan DEYOLO / YOLOv8")
+
+col_vid_ctrl, col_vid_main = st.columns([1, 2])
+
+with col_vid_ctrl:
+    st.subheader("1. Pilih Model Weights")
+    vid_model_name = st.selectbox("Model Weights:", list(MODEL_REGISTRY.keys()), key="vid_model")
+    vid_model_cfg = MODEL_REGISTRY[vid_model_name]
+
+    st.subheader("2. Upload Video")
+    vid_file = st.file_uploader(
+        "Pilih file video (MP4, AVI, MOV, MKV)",
+        type=["mp4", "avi", "mov", "mkv"],
+        key="vid_upload"
+    )
+
+    st.subheader("3. Pengaturan Deteksi")
+    vid_conf = st.slider("Confidence Threshold", 0.05, 1.0, CONF_THRESHOLD_DEFAULT, 0.05, key="vid_conf")
+    vid_iou = st.slider("IoU Threshold (NMS)", 0.05, 1.0, IOU_THRESHOLD_DEFAULT, 0.05, key="vid_iou")
+
+    st.subheader("4. Pengaturan Euclidean Tracker")
+    max_dist = st.slider(
+        "Max Distance Threshold (pixel)",
+        20, 200, 65, 5,
+        help="Jarak Euclidean maksimum antar centroid untuk dianggap sebagai ID yang sama.",
+        key="vid_max_dist"
+    )
+    max_disapp = st.slider(
+        "Max Disappeared (frames)",
+        5, 100, 20, 5,
+        help="Batas frame objek hilang sebelum ID dihapus dari sistem.",
+        key="vid_max_disapp"
+    )
+    traj_len = st.slider(
+        "Panjang Jejak Lintasan (Trail)",
+        5, 100, 30, 5,
+        help="Jumlah titik lintasan masa lalu yang ditampilkan pada visualisasi.",
+        key="vid_traj_len"
+    )
+    frame_stride = st.select_slider(
+        "Frame Processing Stride",
+        options=[1, 2, 3, 5],
+        value=1,
+        help="1 = Proses setiap frame. 2/3 = Lewati beberapa frame untuk mempercepat pemrosesan video panjang (5 menit).",
+        key="vid_stride"
+    )
+
+    vid_run_btn = st.button("🚀 Mulai Pelacakan Video", type="primary", use_container_width=True, key="vid_run")
+
+with col_vid_main:
+    if vid_file is not None:
+        temp_dir = Path(tempfile.gettempdir()) / "deyolo_tracking_ui"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        input_video_path = temp_dir / vid_file.name
+        raw_output_path = temp_dir / f"tracked_raw_{vid_file.name}.mp4"
+        h264_output_path = temp_dir / f"tracked_{vid_file.name}.mp4"
+
+        if not input_video_path.exists() or input_video_path.stat().st_size != vid_file.size:
+            with open(input_video_path, "wb") as f:
+                f.write(vid_file.getbuffer())
+
+        cap_info = cv2.VideoCapture(str(input_video_path))
+        total_frames = int(cap_info.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps_input = cap_info.get(cv2.CAP_PROP_FPS) or 30.0
+        width_input = int(cap_info.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height_input = int(cap_info.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        duration_sec = total_frames / fps_input if fps_input > 0 else 0
+        cap_info.release()
+
+        st.info(
+            f"📹 **File Input**: `{vid_file.name}` | Resolusi: `{width_input}x{height_input}` | "
+            f"FPS: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit)"
+        )
+
+        if vid_run_btn:
+            model = get_model(vid_model_cfg["path"])
+            tracker = EuclideanDistTracker(
+                max_distance=max_dist,
+                max_disappeared=max_disapp,
+                trajectory_len=traj_len
+            )
+
+            cap = cv2.VideoCapture(str(input_video_path))
+            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer = cv2.VideoWriter(
+                str(raw_output_path),
+                fourcc,
+                fps_input / frame_stride,
+                (width_input, height_input)
+            )
+
+            progress_bar = st.progress(0, text="Memulai tracking...")
+            m1, m2, m3, m4 = st.columns(4)
+            stat_frame = m1.empty()
+            stat_fps = m2.empty()
+            stat_active = m3.empty()
+            stat_total = m4.empty()
+            live_preview = st.empty()
+
+            frame_idx = 0
+            processed_count = 0
+            start_time = time.time()
+            prev_time = time.time()
+            fps_smooth = fps_input
+
+            is_dual = vid_model_cfg["dual_input"]
+            ir_method = vid_model_cfg["pseudo_ir_method"]
+
+            try:
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+
+                    frame_idx += 1
+
+                    if frame_stride > 1 and (frame_idx % frame_stride != 0):
+                        continue
+
+                    processed_count += 1
+
+                    if is_dual:
+                        pseudo_ir = generate_pseudo_ir(frame, method=ir_method)
+                        results = run_inference(model, frame, vid_conf, vid_iou, True, pseudo_ir)
+                    else:
+                        results = run_inference(model, frame, vid_conf, vid_iou, False)
+
+                    detections = []
+                    if results and len(results) > 0 and results[0].boxes is not None:
+                        for box in results[0].boxes:
+                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                            conf = float(box.conf[0].cpu().numpy())
+                            cls_id = int(box.cls[0].cpu().numpy())
+                            cls_name = model.names.get(cls_id, str(cls_id))
+                            detections.append([x1, y1, x2, y2, conf, cls_name])
+
+                    tracked_objects = tracker.update(detections)
+
+                    curr_time = time.time()
+                    dt = curr_time - prev_time
+                    prev_time = curr_time
+                    if dt > 0:
+                        fps_inst = 1.0 / dt
+                        fps_smooth = 0.9 * fps_smooth + 0.1 * fps_inst
+
+                    display_frame = frame.copy()
+                    draw_tracks(display_frame, tracked_objects)
+                    draw_hud(
+                        display_frame,
+                        fps=fps_smooth,
+                        active_count=len(tracked_objects),
+                        total_count=tracker.get_total_count(),
+                        model_name=Path(vid_model_cfg["path"]).stem
+                    )
+
+                    writer.write(display_frame)
+
+                    if processed_count % 5 == 0 or frame_idx >= total_frames:
+                        pct = min(frame_idx / total_frames, 1.0) if total_frames > 0 else 0
+                        progress_bar.progress(pct, text=f"Memproses video: {frame_idx}/{total_frames} frame ({pct*100:.1f}%)")
+
+                        stat_frame.metric("Frame", f"{frame_idx} / {total_frames}")
+                        stat_fps.metric("Processing FPS", f"{fps_smooth:.1f}")
+                        stat_active.metric("Active Vehicles", len(tracked_objects))
+                        stat_total.metric("Total Kendaraan", tracker.get_total_count())
+
+                        live_preview.image(
+                            cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB),
+                            caption="Live Tracking Preview",
+                            width="stretch"
+                        )
+
+            except Exception as e:
+                st.error(f"Error saat tracking: {e}")
+                st.code(traceback.format_exc())
+            finally:
+                cap.release()
+                writer.release()
+
+            total_elapsed = time.time() - start_time
+            avg_fps = processed_count / total_elapsed if total_elapsed > 0 else 0
+
+            progress_bar.progress(1.0, text="✅ Pemrosesan video selesai!")
+            st.success(
+                f"🎉 **Pelacakan Selesai!** Total **{processed_count}** frame diproses "
+                f"dalam **{total_elapsed:.1f}s** (Rata-rata: **{avg_fps:.1f} FPS**)."
+            )
+
+            with st.spinner("Mengonversi video untuk pemutar browser (H.264)..."):
+                is_converted = convert_to_h264(raw_output_path, h264_output_path)
+                final_playback_path = h264_output_path if is_converted and h264_output_path.exists() else raw_output_path
+
+            st.subheader("🎬 Hasil Pelacakan Video")
+            try:
+                with open(final_playback_path, "rb") as vid_bytes:
+                    st.video(vid_bytes.read())
+            except Exception:
+                st.warning("Video tidak dapat diputar otomatis, namun dapat diunduh melalui tombol di bawah.")
+
+            with open(final_playback_path, "rb") as vid_file_data:
+                st.download_button(
+                    label="📥 Download Video Hasil Tracking (.mp4)",
+                    data=vid_file_data,
+                    file_name=f"tracked_{vid_file.name}",
+                    mime="video/mp4",
+                    type="primary",
+                    use_container_width=True
+                )
+
+            st.subheader("📊 Statistik Kendaraan Unik")
+            s1, s2 = st.columns([1, 1])
+            with s1:
+                st.metric("Total Kendaraan Terhitung", tracker.get_total_count())
+            with s2:
+                cls_counts = tracker.get_class_counts()
+                if cls_counts:
+                    md_c = "| Kelas Kendaraan | Jumlah Unit |\n|:---|:---:|\n"
+                    for k, v in cls_counts.items():
+                        md_c += f"| **{k}** | `{v}` |\n"
+                    st.markdown(md_c)
+                else:
+                    st.write("Tidak ada kendaraan yang terdeteksi.")
+    else:
+        st.info("👈 Silakan upload file video di panel kiri untuk mulai.")

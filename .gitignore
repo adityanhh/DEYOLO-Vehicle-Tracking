@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environments
+venv/
+env/
+ENV/
+.venv/
+
+# Streamlit
+.streamlit/
+
+# Temporary video and image outputs
+*.mp4
+*.avi
+*.mov
+*.mkv
+!test_video.mp4
+predict_results/
+tracking_results/
+bytetrack_results/
+deepsort_results/
+temp_*.jpg
+temp_*.png
+temp_*.mp4
+
+# OS and IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.gemini/
