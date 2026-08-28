@@ -93,7 +93,43 @@ def get_model(weights_path):
     return YOLO(weights_path)
 
 
+import json
+
 cv2.setNumThreads(os.cpu_count() or 4)
+
+
+def get_exact_video_fps(video_path):
+    """Mendapatkan FPS asli yang presisi dari header video menggunakan ffprobe atau cv2."""
+    ffprobe_cmd = shutil.which("ffprobe") or r"C:\ffmpeg\bin\ffprobe.EXE"
+    if os.path.exists(ffprobe_cmd):
+        try:
+            cmd = [
+                ffprobe_cmd, "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=r_frame_rate,avg_frame_rate",
+                "-of", "json",
+                str(video_path)
+            ]
+            out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
+            info = json.loads(out.decode("utf-8"))
+            stream = info.get("streams", [{}])[0]
+            for key in ["avg_frame_rate", "r_frame_rate"]:
+                val = stream.get(key, "")
+                if "/" in val:
+                    num, den = val.split("/")
+                    if float(den) > 0:
+                        fps = float(num) / float(den)
+                        if 5.0 <= fps <= 120.0:
+                            return round(fps, 2)
+        except Exception:
+            pass
+
+    cap = cv2.VideoCapture(str(video_path))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    cap.release()
+    if fps and 5.0 <= fps <= 120.0:
+        return round(float(fps), 2)
+    return 30.0
 
 
 def run_inference(model, rgb_img, conf, iou, dual_input, pseudo_ir_img=None, imgsz=640):
@@ -215,6 +251,21 @@ with col_ctrl:
     line_direction = st.selectbox("Arah yang Dihitung:", ["both (Dua Arah)", "down (Masuk/Ke Bawah)", "up (Keluar/Ke Atas)"])
     direction_code = "down" if "down" in line_direction else ("up" if "up" in line_direction else "both")
 
+    st.subheader("6. Kecepatan Putar Video Hasil (Playback Speed)")
+    playback_speed = st.selectbox(
+        "Kecepatan Putar Video:",
+        [
+            "1.0x (Normal Alami Sesuai Aslinya) ⭐",
+            "0.75x (Sedikit Lebih Lambat)",
+            "0.5x (Slow-Motion — Rekomendasi untuk Analisis Detail)",
+            "1.25x (Sedikit Lebih Cepat)",
+            "1.5x (Cepat)"
+        ],
+        index=0,
+        help="Pilih 1.0x untuk kecepatan normal alami, atau 0.75x / 0.5x Slow-Mo jika ingin mengamati pergerakan kendaraan dan counting dengan sangat jelas."
+    )
+    speed_mult = 0.5 if "0.5x" in playback_speed else (0.75 if "0.75x" in playback_speed else (1.25 if "1.25x" in playback_speed else (1.5 if "1.5x" in playback_speed else 1.0)))
+
     proc_mode = st.radio(
         "Mode Kelancaran Video (FPS):",
         [
@@ -243,17 +294,19 @@ with col_main:
 
         cap_info = cv2.VideoCapture(str(input_path))
         total_frames = int(cap_info.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps_raw = cap_info.get(cv2.CAP_PROP_FPS)
-        fps_input = float(fps_raw) if (fps_raw and 5.0 <= fps_raw <= 120.0) else 30.0
+        exact_fps = get_exact_video_fps(input_path)
+        fps_input = exact_fps
         width_input = int(cap_info.get(cv2.CAP_PROP_FRAME_WIDTH))
         height_input = int(cap_info.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration_sec = total_frames / fps_input if fps_input > 0 else 0
         cap_info.release()
 
+        target_playback_fps = max(5.0, min(60.0, (fps_input / frame_stride) * speed_mult))
+
         st.info(
             f"📹 **Video Input**: `{uploaded_video.name}` | Resolusi: `{width_input}x{height_input}` | "
             f"FPS Asli: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit) | "
-            f"Mode: `{'100% Full Smooth' if frame_stride == 1 else 'Fast Stride 2'}`"
+            f"Kecepatan Output: `{target_playback_fps:.1f} FPS ({playback_speed.split(' ')[0]})`"
         )
 
         if run_button:
@@ -276,11 +329,10 @@ with col_main:
 
             cap = cv2.VideoCapture(str(input_path))
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer_fps = fps_input if frame_stride == 1 else (fps_input / frame_stride)
             writer = cv2.VideoWriter(
                 str(raw_output_path),
                 fourcc,
-                writer_fps,
+                target_playback_fps,
                 (width_input, height_input)
             )
 
@@ -397,11 +449,11 @@ with col_main:
             progress_bar.progress(1.0, text="✅ Pemrosesan ByteTrack Selesai!")
             st.success(
                 f"🎉 **ByteTrack Selesai!** Total **{processed_count}** frame diproses "
-                f"dalam **{total_elapsed:.1f}s** (Kecepatan: **{avg_fps:.1f} FPS**, Output Video: **{writer_fps:.1f} FPS Smooth**)."
+                f"dalam **{total_elapsed:.1f}s** (Kecepatan: **{avg_fps:.1f} FPS**, Output Video: **{target_playback_fps:.1f} FPS Smooth**)."
             )
 
-            with st.spinner("Mengonversi video ke format H.264 CFR (Smooth Web Playback)..."):
-                is_converted = convert_to_h264(raw_output_path, h264_output_path, fps=writer_fps)
+            with st.spinner(f"Mengonversi video ke format H.264 CFR ({target_playback_fps:.1f} FPS)..."):
+                is_converted = convert_to_h264(raw_output_path, h264_output_path, fps=target_playback_fps)
                 final_playback_path = h264_output_path if is_converted and h264_output_path.exists() else raw_output_path
 
             # Player Video
