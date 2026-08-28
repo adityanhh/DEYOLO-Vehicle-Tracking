@@ -93,33 +93,39 @@ def get_model(weights_path):
     return YOLO(weights_path)
 
 
-def run_inference(model, rgb_img, conf, iou, dual_input, pseudo_ir_img=None):
-    """Jalankan inferensi deteksi pada 1 frame."""
-    with torch.no_grad():
+cv2.setNumThreads(os.cpu_count() or 4)
+
+
+def run_inference(model, rgb_img, conf, iou, dual_input, pseudo_ir_img=None, imgsz=640):
+    """Jalankan inferensi deteksi pada 1 frame dengan akselerasi tensor imgsz=640."""
+    with torch.inference_mode():
         if not dual_input:
-            results = model.predict(source=rgb_img, conf=conf, iou=iou, save=False, verbose=False)
+            results = model.predict(source=rgb_img, conf=conf, iou=iou, imgsz=imgsz, save=False, verbose=False)
         else:
             results = model.predict(
                 source=[rgb_img, pseudo_ir_img],
                 conf=conf,
                 iou=iou,
+                imgsz=imgsz,
                 save=False,
                 verbose=False,
             )
     return results
 
 
-def convert_to_h264(input_video_path, output_video_path):
-    """Konversi video ke format H.264 agar dapat diputar langsung di browser."""
+def convert_to_h264(input_video_path, output_video_path, fps=30.0):
+    """Konversi video ke format H.264 dengan Constant Frame Rate (CFR) agar diputar sangat mulus di browser."""
     ffmpeg_cmd = shutil.which("ffmpeg") or r"C:\ffmpeg\bin\ffmpeg.EXE"
     if os.path.exists(ffmpeg_cmd):
         cmd = [
             ffmpeg_cmd, "-y",
             "-i", str(input_video_path),
+            "-r", f"{fps:.2f}",
             "-vcodec", "libx264",
             "-pix_fmt", "yuv420p",
-            "-crf", "23",
-            "-preset", "veryfast",
+            "-crf", "22",
+            "-preset", "fast",
+            "-movflags", "+faststart",
             str(output_video_path)
         ]
         try:
@@ -209,12 +215,16 @@ with col_ctrl:
     line_direction = st.selectbox("Arah yang Dihitung:", ["both (Dua Arah)", "down (Masuk/Ke Bawah)", "up (Keluar/Ke Atas)"])
     direction_code = "down" if "down" in line_direction else ("up" if "up" in line_direction else "both")
 
-    frame_stride = st.select_slider(
-        "Frame Stride",
-        options=[1, 2, 3],
-        value=1,
-        help="1 = Proses setiap frame (Sangat disarankan untuk ByteTrack agar Kalman Filter akurat)."
+    proc_mode = st.radio(
+        "Mode Kelancaran Video (FPS):",
+        [
+            "100% Full Frame (Sangat Mulus / Smooth — Rekomendasi TA) ⭐",
+            "Fast Preview (Stride 2 — Melewati 50% Frame)"
+        ],
+        index=0,
+        help="100% Full Frame memproses seluruh frame tanpa ada yang dilewati untuk hasil video yang halus dan tracking konsisten."
     )
+    frame_stride = 1 if "100%" in proc_mode else 2
 
     run_button = st.button("🚀 Mulai ByteTrack Video", type="primary", use_container_width=True)
 
@@ -233,7 +243,8 @@ with col_main:
 
         cap_info = cv2.VideoCapture(str(input_path))
         total_frames = int(cap_info.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps_input = cap_info.get(cv2.CAP_PROP_FPS) or 30.0
+        fps_raw = cap_info.get(cv2.CAP_PROP_FPS)
+        fps_input = float(fps_raw) if (fps_raw and 5.0 <= fps_raw <= 120.0) else 30.0
         width_input = int(cap_info.get(cv2.CAP_PROP_FRAME_WIDTH))
         height_input = int(cap_info.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration_sec = total_frames / fps_input if fps_input > 0 else 0
@@ -241,7 +252,8 @@ with col_main:
 
         st.info(
             f"📹 **Video Input**: `{uploaded_video.name}` | Resolusi: `{width_input}x{height_input}` | "
-            f"FPS: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit)"
+            f"FPS Asli: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit) | "
+            f"Mode: `{'100% Full Smooth' if frame_stride == 1 else 'Fast Stride 2'}`"
         )
 
         if run_button:
@@ -264,10 +276,11 @@ with col_main:
 
             cap = cv2.VideoCapture(str(input_path))
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+            writer_fps = fps_input if frame_stride == 1 else (fps_input / frame_stride)
             writer = cv2.VideoWriter(
                 str(raw_output_path),
                 fourcc,
-                fps_input / frame_stride,
+                writer_fps,
                 (width_input, height_input)
             )
 
@@ -277,7 +290,13 @@ with col_main:
             stat_fps = m2.empty()
             stat_active = m3.empty()
             stat_line = m4.empty()
+            preview_caption = st.empty()
             live_preview = st.empty()
+
+            preview_caption.caption(
+                "ℹ️ *Live preview di-refresh berkala untuk performa web browser. "
+                "File video hasil akhir akan memproses seluruh frame secara penuh dan sangat mulus (CFR 30/60 FPS asli).*"
+            )
 
             frame_idx = 0
             processed_count = 0
@@ -300,12 +319,12 @@ with col_main:
 
                     processed_count += 1
 
-                    # 1. Inferensi Model
+                    # 1. Inferensi Model dengan imgsz=640
                     if is_dual:
                         pseudo_ir = generate_pseudo_ir(frame, method=ir_method)
-                        results = run_inference(model, frame, conf_thresh, iou_thresh, True, pseudo_ir)
+                        results = run_inference(model, frame, conf_thresh, iou_thresh, True, pseudo_ir, imgsz=640)
                     else:
-                        results = run_inference(model, frame, conf_thresh, iou_thresh, False)
+                        results = run_inference(model, frame, conf_thresh, iou_thresh, False, imgsz=640)
 
                     # 2. Ekstraksi Box
                     detections = []
@@ -355,13 +374,13 @@ with col_main:
                         progress_bar.progress(pct, text=f"ByteTrack Memproses: {frame_idx}/{total_frames} frame ({pct*100:.1f}%)")
 
                         stat_frame.metric("Frame", f"{frame_idx} / {total_frames}")
-                        stat_fps.metric("Processing FPS", f"{fps_smooth:.1f}")
+                        stat_fps.metric("Processing Speed", f"{fps_smooth:.1f} FPS")
                         stat_active.metric("Active Vehicles", len(tracked_objects))
                         stat_line.metric("Garis Hitung", count_data.get('total', 0), help=f"In: {count_data.get('total_in', 0)} | Out: {count_data.get('total_out', 0)}")
 
                         live_preview.image(
                             cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB),
-                            caption="Live ByteTrack Preview",
+                            caption=f"Live ByteTrack Preview (Frame {frame_idx}/{total_frames})",
                             width="stretch"
                         )
 
@@ -378,11 +397,11 @@ with col_main:
             progress_bar.progress(1.0, text="✅ Pemrosesan ByteTrack Selesai!")
             st.success(
                 f"🎉 **ByteTrack Selesai!** Total **{processed_count}** frame diproses "
-                f"dalam **{total_elapsed:.1f}s** (Rata-rata: **{avg_fps:.1f} FPS**)."
+                f"dalam **{total_elapsed:.1f}s** (Kecepatan: **{avg_fps:.1f} FPS**, Output Video: **{writer_fps:.1f} FPS Smooth**)."
             )
 
-            with st.spinner("Mengonversi video ke H.264 untuk web browser..."):
-                is_converted = convert_to_h264(raw_output_path, h264_output_path)
+            with st.spinner("Mengonversi video ke format H.264 CFR (Smooth Web Playback)..."):
+                is_converted = convert_to_h264(raw_output_path, h264_output_path, fps=writer_fps)
                 final_playback_path = h264_output_path if is_converted and h264_output_path.exists() else raw_output_path
 
             # Player Video
