@@ -105,8 +105,14 @@ def draw_counting_line(frame, line_y):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
 
 
-def draw_tracks(frame, tracked_objects):
-    """Menggambar bounding box, label ID + Class, titik centroid, dan garis trajectory."""
+def draw_tracks(frame, tracked_objects, counted_info=None):
+    """
+    Menggambar bounding box, label ID + Class, titik centroid, dan garis trajectory.
+    ID pelacakan tetap konstan dan konsisten sebelum dan sesudah melewati garis counting.
+    """
+    if counted_info is None:
+        counted_info = {}
+
     for obj in tracked_objects:
         obj_id = obj['id']
         x1, y1, x2, y2 = obj['bbox']
@@ -116,6 +122,8 @@ def draw_tracks(frame, tracked_objects):
         trajectory = obj['trajectory']
 
         color = get_color_for_id(obj_id)
+        is_counted = obj_id in counted_info
+        direction_tag = f" [{counted_info[obj_id]}]" if is_counted else ""
 
         # 1. Garis Trajectory
         if len(trajectory) > 1:
@@ -123,15 +131,16 @@ def draw_tracks(frame, tracked_objects):
                 thickness = int(np.sqrt(16 * (i / len(trajectory)))) + 1
                 cv2.line(frame, trajectory[i - 1], trajectory[i], color, thickness)
 
-        # 2. Bounding Box
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        # 2. Bounding Box (border lebih tegas jika sudah terhitung)
+        box_thickness = 3 if is_counted else 2
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, box_thickness)
 
         # 3. Titik Centroid
         cv2.circle(frame, (cx, cy), 4, color, -1)
         cv2.circle(frame, (cx, cy), 6, (255, 255, 255), 1)
 
-        # 4. Label ID + Class + Confidence
-        label = f"ID:{obj_id} {cls_name} {conf:.2f}"
+        # 4. Label ID + Class + Direction Tag + Confidence
+        label = f"ID:{obj_id} {cls_name}{direction_tag} {conf:.2f}"
         (label_w, label_h), baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.48, 1)
 
         label_y1 = max(y1 - label_h - 8, 0)
@@ -301,7 +310,7 @@ def run_bytetrack():
                 # 6. Gambar Visualisasi
                 display_frame = frame.copy()
                 draw_counting_line(display_frame, count_data['line_y'])
-                draw_tracks(display_frame, tracked_objects)
+                draw_tracks(display_frame, tracked_objects, counted_info=count_data.get('counted_directions', {}))
                 draw_hud(
                     display_frame,
                     fps=fps_smooth,

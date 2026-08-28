@@ -301,7 +301,7 @@ with col_main:
                     display_frame = frame.copy()
                     if enable_line:
                         draw_counting_line(display_frame, count_data['line_y'])
-                    draw_tracks(display_frame, tracked_objects)
+                    draw_tracks(display_frame, tracked_objects, counted_info=count_data.get('counted_directions', {}))
                     draw_hud(
                         display_frame,
                         fps=fps_smooth,

@@ -434,6 +434,7 @@ class CountingLine:
         self.total_in = 0
         self.total_out = 0
         self.counted_ids = set()
+        self.counted_directions = {}  # id -> 'IN' / 'OUT'
         self.class_counts = {}
 
     def update(self, tracked_objects, frame_height):
@@ -456,6 +457,7 @@ class CountingLine:
                     if self.direction in ["down", "both"]:
                         self.total_in += 1
                         self.counted_ids.add(obj_id)
+                        self.counted_directions[obj_id] = "IN"
                         cls_k = str(cls_name)
                         self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
 
@@ -464,6 +466,7 @@ class CountingLine:
                     if self.direction in ["up", "both"]:
                         self.total_out += 1
                         self.counted_ids.add(obj_id)
+                        self.counted_directions[obj_id] = "OUT"
                         cls_k = str(cls_name)
                         self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
 
@@ -472,11 +475,14 @@ class CountingLine:
             'total_out': self.total_out,
             'total': self.total_in + self.total_out,
             'class_counts': dict(self.class_counts),
-            'line_y': line_y
+            'line_y': line_y,
+            'counted_ids': set(self.counted_ids),
+            'counted_directions': dict(self.counted_directions)
         }
 
     def reset(self):
         self.total_in = 0
         self.total_out = 0
         self.counted_ids.clear()
+        self.counted_directions.clear()
         self.class_counts.clear()

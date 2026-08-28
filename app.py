@@ -4,8 +4,12 @@ DEYOLO Vehicle Detection & Tracking — Testing App
 Aplikasi Web interaktif (Streamlit) untuk pengujian Deteksi dan Pelacakan (Tracking)
 kendaraan dalam kondisi hujan menggunakan YOLOv8 & DEYOLO (Dual-Input Pseudo-IR).
 
-Cara jalankan:
-    streamlit run app.py
+Didukung oleh algoritma Multi-Object Tracking:
+1. ByteTrack (SOTA - Two-Stage IoU + Kalman Filter, Anti-ID Switching)
+2. DeepSORT (Visual Re-ID Appearance + Matching Cascade)
+3. Euclidean Distance Tracker (Baseline Centroid)
+
+Dilengkapi Virtual Counting Line (Tripwire) untuk traffic counting bebas duplikat.
 """
 
 import os
@@ -25,8 +29,15 @@ import numpy as np
 from PIL import Image
 import torch
 
+from bytetrack.byte_tracker import BYTETracker, CountingLine as ByteCountingLine
+from bytetrack.track_video_bytetrack import (
+    get_color_for_id,
+    draw_tracks as draw_byte_tracks,
+    draw_hud as draw_byte_hud,
+    draw_counting_line
+)
+from deepsort.tracker import DeepSORTTracker, CountingLine as DeepCountingLine
 from tracking.euclidean_tracker import EuclideanDistTracker
-from tracking.track_video import get_color_for_id, draw_tracks, draw_hud
 
 # ========================= KONFIGURASI MODEL =========================
 MODEL_REGISTRY = {
@@ -136,10 +147,10 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("🚗 DEYOLO Vehicle Detection & Tracking App")
-st.caption("Aplikasi Pengujian Deteksi Kendaraan (Kondisi Hujan) & Pelacakan Euclidean Distance Tracker")
+st.title("🚗 DEYOLO Vehicle Detection & Multi-Object Tracking")
+st.caption("Aplikasi Pengujian Deteksi Kendaraan (Kondisi Hujan) & Pelacakan Bebas ID Switching (ByteTrack / DeepSORT)")
 
-tab_image, tab_video = st.tabs(["📷 Deteksi Gambar Tunggal", "🎥 Pelacakan Video (Tracking)"])
+tab_image, tab_video = st.tabs(["📷 Deteksi Gambar Tunggal", "🎥 Pelacakan Video (Tracking & Counting)"])
 
 # -------------------------------------------------------------
 # TAB 1: DETEKSI GAMBAR TUNGGAL
@@ -171,7 +182,7 @@ with tab_image:
             else:
                 if not img_run_btn:
                     st.subheader("Preview Gambar Input")
-                    st.image(cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), caption="Gambar Input (RGB)", use_container_width=True)
+                    st.image(cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), caption="Gambar Input (RGB)", width="stretch")
 
                 if img_run_btn:
                     with st.spinner("Menjalankan model..."):
@@ -195,11 +206,11 @@ with tab_image:
                             st.subheader("Hasil Deteksi")
                             if img_model_cfg["dual_input"]:
                                 c1, c2, c3 = st.columns(3)
-                                c1.image(cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), caption="RGB Original", use_container_width=True)
-                                c2.image(pseudo_ir_display, caption=f"Pseudo-IR ({img_model_cfg['pseudo_ir_method']})", use_container_width=True)
-                                c3.image(result_img_rgb, caption="Deteksi DEYOLO", use_container_width=True)
+                                c1.image(cv2.cvtColor(rgb_img, cv2.COLOR_BGR2RGB), caption="RGB Original", width="stretch")
+                                c2.image(pseudo_ir_display, caption=f"Pseudo-IR ({img_model_cfg['pseudo_ir_method']})", width="stretch")
+                                c3.image(result_img_rgb, caption="Deteksi DEYOLO", width="stretch")
                             else:
-                                st.image(result_img_rgb, caption="Hasil Deteksi Baseline YOLOv8", use_container_width=True)
+                                st.image(result_img_rgb, caption="Hasil Deteksi Baseline YOLOv8", width="stretch")
 
                             st.subheader("Detail Objek Terdeteksi")
                             boxes = results[0].boxes
@@ -223,15 +234,25 @@ with tab_image:
 
 
 # -------------------------------------------------------------
-# TAB 2: PELACAKAN VIDEO (TRACKING)
+# TAB 2: PELACAKAN VIDEO (TRACKING & COUNTING)
 # -------------------------------------------------------------
 with tab_video:
     col_vid_ctrl, col_vid_main = st.columns([1, 2])
 
     with col_vid_ctrl:
-        st.subheader("1. Pilih Model Tracking")
+        st.subheader("1. Pilih Model & Algoritma Tracking")
         vid_model_name = st.selectbox("Model Weights:", list(MODEL_REGISTRY.keys()), key="vid_model")
         vid_model_cfg = MODEL_REGISTRY[vid_model_name]
+
+        tracker_algo = st.selectbox(
+            "Algoritma Tracking:",
+            [
+                "ByteTrack (SOTA — Anti ID Switching) ⭐",
+                "DeepSORT (Re-ID Visual Appearance)",
+                "Euclidean Distance Tracker (Baseline)"
+            ],
+            key="vid_tracker_algo"
+        )
 
         st.subheader("2. Input Video")
         vid_file = st.file_uploader(
@@ -244,30 +265,25 @@ with tab_video:
         vid_conf = st.slider("Confidence Threshold", 0.05, 1.0, CONF_THRESHOLD_DEFAULT, 0.05, key="vid_conf")
         vid_iou = st.slider("IoU Threshold (NMS)", 0.05, 1.0, IOU_THRESHOLD_DEFAULT, 0.05, key="vid_iou")
 
-        st.subheader("4. Pengaturan Euclidean Tracker")
-        max_dist = st.slider(
-            "Max Distance Threshold (pixel)",
-            20, 200, 65, 5,
-            help="Jarak Euclidean maksimum antar centroid untuk dianggap sebagai ID yang sama.",
-            key="vid_max_dist"
+        st.subheader("4. Garis Hitung (Counting Line / Tripwire)")
+        enable_line = st.checkbox("Aktifkan Garis Hitung (0% Duplikasi)", value=True, key="vid_enable_line")
+        line_y_ratio = st.slider(
+            "Posisi Garis Vertikal (Y)", 0.10, 0.90, 0.55, 0.05,
+            help="Posisi garis horizontal relatif terhadap tinggi video. Kendaraan mempertahankan ID yang sama sebelum dan sesudah garis.",
+            key="vid_line_y"
         )
-        max_disapp = st.slider(
-            "Max Disappeared (frames)",
-            5, 100, 20, 5,
-            help="Batas frame objek hilang sebelum ID dihapus dari sistem.",
-            key="vid_max_disapp"
+        line_direction = st.selectbox(
+            "Arah Hitung:",
+            ["both (Dua Arah)", "down (Masuk/Ke Bawah)", "up (Keluar/Ke Atas)"],
+            key="vid_line_dir"
         )
-        traj_len = st.slider(
-            "Panjang Jejak Lintasan (Trail)",
-            5, 100, 30, 5,
-            help="Jumlah titik lintasan masa lalu yang ditampilkan pada visualisasi.",
-            key="vid_traj_len"
-        )
+        direction_code = "down" if "down" in line_direction else ("up" if "up" in line_direction else "both")
+
         frame_stride = st.select_slider(
             "Frame Processing Stride",
-            options=[1, 2, 3, 5],
+            options=[1, 2, 3],
             value=1,
-            help="1 = Proses setiap frame. 2/3 = Lewati beberapa frame untuk mempercepat pemrosesan video panjang.",
+            help="1 = Proses setiap frame (Sangat disarankan untuk ByteTrack agar ID stabil tanpa switch).",
             key="vid_stride"
         )
 
@@ -275,20 +291,17 @@ with tab_video:
 
     with col_vid_main:
         if vid_file is not None:
-            # Simpan file upload ke temporary directory
-            temp_dir = Path(tempfile.gettempdir()) / "deyolo_tracking_ui"
+            temp_dir = Path(tempfile.gettempdir()) / "deyolo_tracking_all_ui"
             temp_dir.mkdir(parents=True, exist_ok=True)
 
             input_video_path = temp_dir / vid_file.name
             raw_output_path = temp_dir / f"tracked_raw_{vid_file.name}.mp4"
             h264_output_path = temp_dir / f"tracked_{vid_file.name}.mp4"
 
-            # Tulis file jika belum ada atau file baru
             if not input_video_path.exists() or input_video_path.stat().st_size != vid_file.size:
                 with open(input_video_path, "wb") as f:
                     f.write(vid_file.getbuffer())
 
-            # Cek info video input
             cap_info = cv2.VideoCapture(str(input_video_path))
             total_frames = int(cap_info.get(cv2.CAP_PROP_FRAME_COUNT))
             fps_input = cap_info.get(cv2.CAP_PROP_FPS) or 30.0
@@ -299,17 +312,23 @@ with tab_video:
 
             st.info(
                 f"📹 **Info Video**: `{vid_file.name}` | Resolusi: `{width_input}x{height_input}` | "
-                f"FPS: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit)"
+                f"FPS: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit) | "
+                f"Tracker: `{tracker_algo}`"
             )
 
             if vid_run_btn:
-                # Inisialisasi model dan tracker
                 model = get_model(vid_model_cfg["path"])
-                tracker = EuclideanDistTracker(
-                    max_distance=max_dist,
-                    max_disappeared=max_disapp,
-                    trajectory_len=traj_len
-                )
+
+                # Inisialisasi Tracker sesuai pilihan pengguna
+                if "ByteTrack" in tracker_algo:
+                    tracker = BYTETracker(track_thresh=0.40, match_thresh=0.80, track_buffer=45, frame_rate=fps_input)
+                    counting_line = ByteCountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
+                elif "DeepSORT" in tracker_algo:
+                    tracker = DeepSORTTracker(max_cosine_dist=0.35, max_age=40, n_init=3)
+                    counting_line = DeepCountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
+                else:
+                    tracker = EuclideanDistTracker(max_distance=90, max_disappeared=30)
+                    counting_line = ByteCountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
 
                 cap = cv2.VideoCapture(str(input_video_path))
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -320,7 +339,6 @@ with tab_video:
                     (width_input, height_input)
                 )
 
-                # Elemen UI Realtime
                 progress_bar = st.progress(0, text="Memulai tracking...")
                 m1, m2, m3, m4 = st.columns(4)
                 stat_frame = m1.empty()
@@ -345,8 +363,6 @@ with tab_video:
                             break
 
                         frame_idx += 1
-
-                        # Skip frame sesuai stride
                         if frame_stride > 1 and (frame_idx % frame_stride != 0):
                             continue
 
@@ -370,9 +386,18 @@ with tab_video:
                                 detections.append([x1, y1, x2, y2, conf, cls_name])
 
                         # 3. Update Tracker
-                        tracked_objects = tracker.update(detections)
+                        if "DeepSORT" in tracker_algo:
+                            tracked_objects = tracker.update(frame, detections)
+                        else:
+                            tracked_objects = tracker.update(detections)
 
-                        # 4. Hitung FPS
+                        # 4. Update Garis Hitung
+                        count_data = counting_line.update(tracked_objects, height_input) if enable_line else {
+                            'total': tracker.get_total_count(), 'total_in': 0, 'total_out': 0, 'line_y': int(height_input * line_y_ratio),
+                            'counted_directions': {}
+                        }
+
+                        # 5. Hitung FPS
                         curr_time = time.time()
                         dt = curr_time - prev_time
                         prev_time = curr_time
@@ -380,18 +405,19 @@ with tab_video:
                             fps_inst = 1.0 / dt
                             fps_smooth = 0.9 * fps_smooth + 0.1 * fps_inst
 
-                        # 5. Gambar visualisasi
+                        # 6. Gambar visualisasi
                         display_frame = frame.copy()
-                        draw_tracks(display_frame, tracked_objects)
-                        draw_hud(
+                        if enable_line:
+                            draw_counting_line(display_frame, count_data['line_y'])
+                        draw_byte_tracks(display_frame, tracked_objects, counted_info=count_data.get('counted_directions', {}))
+                        draw_byte_hud(
                             display_frame,
                             fps=fps_smooth,
                             active_count=len(tracked_objects),
-                            total_count=tracker.get_total_count(),
+                            count_data=count_data,
                             model_name=Path(vid_model_cfg["path"]).stem
                         )
 
-                        # 6. Tulis ke file video
                         writer.write(display_frame)
 
                         # 7. Update UI setiap 5 frame
@@ -402,13 +428,12 @@ with tab_video:
                             stat_frame.metric("Frame", f"{frame_idx} / {total_frames}")
                             stat_fps.metric("Processing FPS", f"{fps_smooth:.1f}")
                             stat_active.metric("Active Vehicles", len(tracked_objects))
-                            stat_total.metric("Total Kendaraan", tracker.get_total_count())
+                            stat_total.metric("Garis Hitung", count_data.get('total', 0), help=f"In: {count_data.get('total_in', 0)} | Out: {count_data.get('total_out', 0)}")
 
-                            # Live visual preview
                             live_preview.image(
                                 cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB),
-                                caption="Live Tracking Preview",
-                                use_container_width=True
+                                caption="Live Tracking Preview (ID Tetap Konsisten Sebelum & Sesudah Garis)",
+                                width="stretch"
                             )
 
                 except Exception as e:
@@ -427,12 +452,10 @@ with tab_video:
                     f"dalam **{total_elapsed:.1f}s** (Rata-rata: **{avg_fps:.1f} FPS**)."
                 )
 
-                # Konversi ke format H.264 untuk diputar di browser
                 with st.spinner("Mengonversi video untuk pemutar browser (H.264)..."):
                     is_converted = convert_to_h264(raw_output_path, h264_output_path)
                     final_playback_path = h264_output_path if is_converted and h264_output_path.exists() else raw_output_path
 
-                # Tampilkan Pemutar Video & Statistik
                 st.subheader("🎬 Hasil Pelacakan Video")
                 try:
                     with open(final_playback_path, "rb") as vid_bytes:
@@ -440,7 +463,6 @@ with tab_video:
                 except Exception:
                     st.warning("Video tidak dapat diputar otomatis, namun dapat diunduh melalui tombol di bawah.")
 
-                # Tombol Download Video
                 with open(final_playback_path, "rb") as vid_file_data:
                     st.download_button(
                         label="📥 Download Video Hasil Tracking (.mp4)",
@@ -451,13 +473,15 @@ with tab_video:
                         use_container_width=True
                     )
 
-                # Ringkasan Statistik Kendaraan
-                st.subheader("📊 Statistik Kendaraan Unik")
+                st.subheader("📊 Statistik Kendaraan Unik (Bebas Duplikat)")
                 s1, s2 = st.columns([1, 1])
                 with s1:
-                    st.metric("Total Kendaraan Terhitung", tracker.get_total_count())
+                    st.metric("Total Melintasi Garis (Bebas Duplikat)", count_data.get('total', 0))
+                    st.write(f"- Arah Masuk (In/Down): **{count_data.get('total_in', 0)}** unit")
+                    st.write(f"- Arah Keluar (Out/Up): **{count_data.get('total_out', 0)}** unit")
+                    st.write(f"- Total ID Terdaftar: **{tracker.get_total_count()}** ID")
                 with s2:
-                    cls_counts = tracker.get_class_counts()
+                    cls_counts = count_data.get('class_counts', {}) if enable_line else tracker.get_class_counts()
                     if cls_counts:
                         md_c = "| Kelas Kendaraan | Jumlah Unit |\n|:---|:---:|\n"
                         for k, v in cls_counts.items():
