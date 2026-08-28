@@ -91,13 +91,49 @@ def draw_hud(frame, fps, active_count, count_data, model_name):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.52, (50, 220, 255), 2, cv2.LINE_AA)
 
 
-def draw_counting_line(frame, line_y):
-    """Menggambar garis virtual tripwire horizontal."""
+def draw_counting_line(frame, count_data):
+    """
+    Menggambar garis virtual tripwire pada frame (Mendukung Split-Lane dan Single Line).
+    """
     h, w = frame.shape[:2]
-    cv2.line(frame, (0, line_y), (w, line_y), (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.line(frame, (0, line_y), (w, line_y), (255, 255, 0), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"COUNTING LINE (Y={line_y})", (w - 240, line_y - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+
+    if isinstance(count_data, int):
+        line_y = count_data
+        cv2.line(frame, (0, line_y), (w, line_y), (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.line(frame, (0, line_y), (w, line_y), (255, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"COUNTING LINE (Y={line_y})", (w - 240, line_y - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+        return
+
+    mode = count_data.get('mode', 'split')
+    if mode == "split":
+        split_x = count_data.get('split_x', w // 2)
+        line_y_left = count_data.get('line_y_left', int(h * 0.70))
+        line_y_right = count_data.get('line_y_right', int(h * 0.50))
+
+        # 1. Garis Pembagi Lajur (Dashed Vertical Divider)
+        y_div_start = max(0, min(line_y_left, line_y_right) - 60)
+        y_div_end = min(h, max(line_y_left, line_y_right) + 60)
+        for y_dash in range(y_div_start, y_div_end, 16):
+            cv2.line(frame, (split_x, y_dash), (split_x, min(y_dash + 8, y_div_end)), (200, 200, 200), 1, cv2.LINE_AA)
+
+        # 2. Garis Lajur Kiri (Arah OUT / Ke Atas) - Warna Neon Orange/Coral
+        cv2.line(frame, (0, line_y_left), (split_x - 5, line_y_left), (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.line(frame, (0, line_y_left), (split_x - 5, line_y_left), (50, 140, 255), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"LANE OUT (Y={line_y_left})", (20, line_y_left - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (50, 140, 255), 1, cv2.LINE_AA)
+
+        # 3. Garis Lajur Kanan (Arah IN / Ke Bawah) - Warna Neon Cyan
+        cv2.line(frame, (split_x + 5, line_y_right), (w, line_y_right), (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.line(frame, (split_x + 5, line_y_right), (w, line_y_right), (255, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"LANE IN (Y={line_y_right})", (w - 200, line_y_right - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
+    else:
+        line_y = count_data.get('line_y', int(h * 0.55))
+        cv2.line(frame, (0, line_y), (w, line_y), (0, 0, 0), 4, cv2.LINE_AA)
+        cv2.line(frame, (0, line_y), (w, line_y), (255, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(frame, f"COUNTING LINE (Y={line_y})", (w - 240, line_y - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1, cv2.LINE_AA)
 
 
 def draw_tracks(frame, tracked_objects, counted_info=None):
@@ -284,8 +320,8 @@ def run_deepsort():
                 # 3. Update DeepSORT
                 tracked_objects = tracker.update(frame, detections)
 
-                # 4. Update Counting Line
-                count_data = counting_line.update(tracked_objects, height)
+                # 4. Update Counting Line (Split-Lane Aware)
+                count_data = counting_line.update(tracked_objects, height, width)
 
                 # 5. Hitung FPS aktual
                 curr_time = time.time()
@@ -297,7 +333,7 @@ def run_deepsort():
 
                 # 6. Gambar Visualisasi
                 display_frame = frame.copy()
-                draw_counting_line(display_frame, count_data['line_y'])
+                draw_counting_line(display_frame, count_data)
                 draw_tracks(display_frame, tracked_objects, counted_info=count_data.get('counted_directions', {}))
                 draw_hud(
                     display_frame,

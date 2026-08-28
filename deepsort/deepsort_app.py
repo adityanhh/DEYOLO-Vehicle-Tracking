@@ -172,12 +172,39 @@ with col_ctrl:
         help="Jumlah frame konfirmasi sebelum track berstatus Confirmed."
     )
 
-    st.subheader("5. Pengaturan Garis Hitung (Counting Line)")
-    enable_line = st.checkbox("Aktifkan Garis Hitung (Tripwire)", value=True)
-    line_y_ratio = st.slider(
-        "Posisi Garis Vertikal (Y)", 0.10, 0.90, 0.55, 0.05,
-        help="Posisi garis horizontal relatif terhadap tinggi video."
+    st.subheader("5. Garis Hitung (Counting Line / Split-Lane)")
+    enable_line = st.checkbox("Aktifkan Garis Hitung (0% Duplikasi)", value=True)
+    counting_mode = st.radio(
+        "Mode Garis Hitung:",
+        ["Split-Lane (Lajur Kiri OUT & Kanan IN) ⭐", "Single Line (Garis Penuh)"],
+        index=0,
+        help="Split-Lane memberikan posisi garis independen untuk lajur kiri (OUT) dan kanan (IN) agar mobil yang baru muncul tidak terlewat."
     )
+    is_split = "Split-Lane" in counting_mode
+
+    if is_split:
+        col_la, col_lb = st.columns(2)
+        with col_la:
+            line_y_left = st.slider(
+                "Garis Lajur Kiri (OUT)", 0.30, 0.90, 0.70, 0.05,
+                help="Garis keluar untuk lajur kiri (arah ke atas). Diletakkan lebih ke bawah agar mobil sempat terdeteksi."
+            )
+        with col_lb:
+            line_y_right = st.slider(
+                "Garis Lajur Kanan (IN)", 0.10, 0.70, 0.50, 0.05,
+                help="Garis masuk untuk lajur kanan (arah ke bawah)."
+            )
+        split_x_ratio = st.slider("Pembagi Lajur X (Tengah Jalan)", 0.20, 0.80, 0.50, 0.05)
+        line_y_ratio = 0.55
+    else:
+        line_y_ratio = st.slider(
+            "Posisi Garis Vertikal (Y)", 0.10, 0.90, 0.55, 0.05,
+            help="Posisi garis horizontal relatif terhadap tinggi video."
+        )
+        line_y_left = 0.70
+        line_y_right = 0.50
+        split_x_ratio = 0.50
+
     line_direction = st.selectbox("Arah yang Dihitung:", ["both (Dua Arah)", "down (Masuk/Ke Bawah)", "up (Keluar/Ke Atas)"])
     direction_code = "down" if "down" in line_direction else ("up" if "up" in line_direction else "both")
 
@@ -224,7 +251,14 @@ with col_main:
                 n_init=n_init,
                 trajectory_len=30
             )
-            counting_line = CountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
+            counting_line = CountingLine(
+                line_y_ratio=line_y_ratio,
+                line_y_left_ratio=line_y_left,
+                line_y_right_ratio=line_y_right,
+                split_x_ratio=split_x_ratio,
+                mode="split" if is_split else "single",
+                direction=direction_code
+            )
 
             cap = cv2.VideoCapture(str(input_path))
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -284,9 +318,10 @@ with col_main:
                     # 3. Update DeepSORT (Feature Extraction + Cascade Matching + Kalman)
                     tracked_objects = tracker.update(frame, detections)
 
-                    # 4. Update Garis Hitung
-                    count_data = counting_line.update(tracked_objects, height_input) if enable_line else {
-                        'total': tracker.get_total_count(), 'total_in': 0, 'total_out': 0, 'line_y': int(height_input * line_y_ratio)
+                    # 4. Update Garis Hitung (Split-Lane Aware)
+                    count_data = counting_line.update(tracked_objects, height_input, width_input) if enable_line else {
+                        'total': tracker.get_total_count(), 'total_in': 0, 'total_out': 0, 'line_y': int(height_input * line_y_ratio),
+                        'counted_directions': {}
                     }
 
                     # 5. Hitung FPS
@@ -300,7 +335,7 @@ with col_main:
                     # 6. Render Visual
                     display_frame = frame.copy()
                     if enable_line:
-                        draw_counting_line(display_frame, count_data['line_y'])
+                        draw_counting_line(display_frame, count_data)
                     draw_tracks(display_frame, tracked_objects, counted_info=count_data.get('counted_directions', {}))
                     draw_hud(
                         display_frame,

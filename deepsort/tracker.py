@@ -423,11 +423,34 @@ class DeepSORTTracker:
 
 
 # =====================================================================
-# VIRTUAL COUNTING LINE (TRIPWIRE) UNTUK ZERO-DUPLICATE COUNTING
+# VIRTUAL COUNTING LINE (TRIPWIRE) & SPLIT-LANE COUNTING
 # =====================================================================
 class CountingLine:
-    def __init__(self, line_y_ratio=0.55, direction="both", buffer_px=15):
+    def __init__(self, line_y_ratio=0.55, line_y_left_ratio=0.70, line_y_right_ratio=0.50,
+                 split_x_ratio=0.50, mode="split", direction="both", buffer_px=15):
+        """
+        Garis Hitung Virtual (Tripwire) dengan dukungan Split-Lane (Lajur Kiri vs Kanan).
+
+        Parameters:
+        -----------
+        line_y_ratio : float
+            Posisi garis horizontal tunggal (mode single line, default: 0.55).
+        line_y_left_ratio : float
+            Posisi garis horizontal untuk Lajur Kiri (Arah OUT / Ke Atas, default: 0.70).
+        line_y_right_ratio : float
+            Posisi garis horizontal untuk Lajur Kanan (Arah IN / Ke Bawah, default: 0.50).
+        split_x_ratio : float
+            Pembagi batas horizontal antara Lajur Kiri dan Lajur Kanan (default: 0.50).
+        mode : str
+            'split' (Split-Lane per lajur) atau 'single' (Garis tunggal penuh).
+        direction : str
+            'both', 'down', atau 'up'.
+        """
         self.line_y_ratio = line_y_ratio
+        self.line_y_left_ratio = line_y_left_ratio
+        self.line_y_right_ratio = line_y_right_ratio
+        self.split_x_ratio = split_x_ratio
+        self.mode = mode
         self.direction = direction
         self.buffer_px = buffer_px
 
@@ -437,45 +460,95 @@ class CountingLine:
         self.counted_directions = {}  # id -> 'IN' / 'OUT'
         self.class_counts = {}
 
-    def update(self, tracked_objects, frame_height):
-        line_y = int(frame_height * self.line_y_ratio)
+    def update(self, tracked_objects, frame_height, frame_width=None):
+        """
+        Evaluasi apakah objek melintasi garis hitung pada frame ini.
+        Mendukung Split-Lane (Lajur Kiri OUT vs Lajur Kanan IN) serta Bbox-Span.
+        """
+        if frame_width is None:
+            frame_width = int(frame_height * (16 / 9))
+
+        split_x = int(frame_width * self.split_x_ratio)
+        line_y_left = int(frame_height * self.line_y_left_ratio)
+        line_y_right = int(frame_height * self.line_y_right_ratio)
+        line_y_single = int(frame_height * self.line_y_ratio)
 
         for obj in tracked_objects:
             obj_id = obj['id']
             trajectory = obj['trajectory']
             cls_name = obj['class_name']
+            bbox = obj.get('bbox', [0, 0, 0, 0])
+            x1, y1, x2, y2 = bbox
+            cx, cy = obj['centroid']
 
             if obj_id in self.counted_ids:
                 continue
 
             if len(trajectory) >= 2:
-                prev_y = trajectory[-2][1]
-                curr_y = trajectory[-1][1]
+                prev_cx, prev_cy = trajectory[-2]
+                curr_cx, curr_cy = trajectory[-1]
+                dy = curr_cy - prev_cy  # dy < 0: moving UP (OUT), dy > 0: moving DOWN (IN)
 
-                # Melintas ke bawah (Down / In)
-                if prev_y < line_y <= curr_y:
-                    if self.direction in ["down", "both"]:
-                        self.total_in += 1
-                        self.counted_ids.add(obj_id)
-                        self.counted_directions[obj_id] = "IN"
-                        cls_k = str(cls_name)
-                        self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
+                if self.mode == "split":
+                    is_left_lane = curr_cx < split_x
 
-                # Melintas ke atas (Up / Out)
-                elif prev_y > line_y >= curr_y:
-                    if self.direction in ["up", "both"]:
-                        self.total_out += 1
-                        self.counted_ids.add(obj_id)
-                        self.counted_directions[obj_id] = "OUT"
-                        cls_k = str(cls_name)
-                        self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
+                    if is_left_lane:
+                        # ==================== LAJUR KIRI: ARAH OUT (KE ATAS) ====================
+                        target_y = line_y_left
+                        crossed_up = (prev_cy > target_y >= curr_cy)
+                        bbox_crossed_up = (dy < 0 and y1 <= target_y <= y2 and prev_cy >= target_y - 20)
+
+                        if (crossed_up or bbox_crossed_up) and self.direction in ["up", "both"]:
+                            self.total_out += 1
+                            self.counted_ids.add(obj_id)
+                            self.counted_directions[obj_id] = "OUT"
+                            cls_k = str(cls_name)
+                            self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
+
+                    else:
+                        # ==================== LAJUR KANAN: ARAH IN (KE BAWAH) ====================
+                        target_y = line_y_right
+                        crossed_down = (prev_cy < target_y <= curr_cy)
+                        bbox_crossed_down = (dy > 0 and y1 <= target_y <= y2 and prev_cy <= target_y + 20)
+
+                        if (crossed_down or bbox_crossed_down) and self.direction in ["down", "both"]:
+                            self.total_in += 1
+                            self.counted_ids.add(obj_id)
+                            self.counted_directions[obj_id] = "IN"
+                            cls_k = str(cls_name)
+                            self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
+
+                else:
+                    # ==================== SINGLE LINE MODE ====================
+                    target_y = line_y_single
+                    # Melintas ke bawah (Down / In)
+                    if prev_cy < target_y <= curr_cy or (dy > 0 and y1 <= target_y <= y2 and prev_cy <= target_y + 15):
+                        if self.direction in ["down", "both"]:
+                            self.total_in += 1
+                            self.counted_ids.add(obj_id)
+                            self.counted_directions[obj_id] = "IN"
+                            cls_k = str(cls_name)
+                            self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
+
+                    # Melintas ke atas (Up / Out)
+                    elif prev_cy > target_y >= curr_cy or (dy < 0 and y1 <= target_y <= y2 and prev_cy >= target_y - 15):
+                        if self.direction in ["up", "both"]:
+                            self.total_out += 1
+                            self.counted_ids.add(obj_id)
+                            self.counted_directions[obj_id] = "OUT"
+                            cls_k = str(cls_name)
+                            self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
 
         return {
             'total_in': self.total_in,
             'total_out': self.total_out,
             'total': self.total_in + self.total_out,
             'class_counts': dict(self.class_counts),
-            'line_y': line_y,
+            'line_y': line_y_single,
+            'line_y_left': line_y_left,
+            'line_y_right': line_y_right,
+            'split_x': split_x,
+            'mode': self.mode,
             'counted_ids': set(self.counted_ids),
             'counted_directions': dict(self.counted_directions)
         }

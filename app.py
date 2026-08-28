@@ -265,13 +265,43 @@ with tab_video:
         vid_conf = st.slider("Confidence Threshold", 0.05, 1.0, CONF_THRESHOLD_DEFAULT, 0.05, key="vid_conf")
         vid_iou = st.slider("IoU Threshold (NMS)", 0.05, 1.0, IOU_THRESHOLD_DEFAULT, 0.05, key="vid_iou")
 
-        st.subheader("4. Garis Hitung (Counting Line / Tripwire)")
+        st.subheader("4. Garis Hitung (Counting Line / Split-Lane)")
         enable_line = st.checkbox("Aktifkan Garis Hitung (0% Duplikasi)", value=True, key="vid_enable_line")
-        line_y_ratio = st.slider(
-            "Posisi Garis Vertikal (Y)", 0.10, 0.90, 0.55, 0.05,
-            help="Posisi garis horizontal relatif terhadap tinggi video. Kendaraan mempertahankan ID yang sama sebelum dan sesudah garis.",
-            key="vid_line_y"
+        counting_mode = st.radio(
+            "Mode Garis Hitung:",
+            ["Split-Lane (Lajur Kiri OUT & Kanan IN) ⭐", "Single Line (Garis Penuh)"],
+            index=0,
+            key="vid_counting_mode",
+            help="Split-Lane memberikan posisi garis independen untuk lajur kiri (OUT) dan kanan (IN) agar mobil yang baru muncul tidak terlewat."
         )
+        is_split = "Split-Lane" in counting_mode
+
+        if is_split:
+            col_la, col_lb = st.columns(2)
+            with col_la:
+                line_y_left = st.slider(
+                    "Garis Lajur Kiri (OUT)", 0.30, 0.90, 0.70, 0.05,
+                    help="Garis keluar untuk lajur kiri (arah ke atas). Diletakkan lebih ke bawah agar mobil sempat terdeteksi.",
+                    key="vid_line_y_left"
+                )
+            with col_lb:
+                line_y_right = st.slider(
+                    "Garis Lajur Kanan (IN)", 0.10, 0.70, 0.50, 0.05,
+                    help="Garis masuk untuk lajur kanan (arah ke bawah).",
+                    key="vid_line_y_right"
+                )
+            split_x_ratio = st.slider("Pembagi Lajur X (Tengah Jalan)", 0.20, 0.80, 0.50, 0.05, key="vid_split_x")
+            line_y_ratio = 0.55
+        else:
+            line_y_ratio = st.slider(
+                "Posisi Garis Vertikal (Y)", 0.10, 0.90, 0.55, 0.05,
+                help="Posisi garis horizontal relatif terhadap tinggi video.",
+                key="vid_line_y"
+            )
+            line_y_left = 0.70
+            line_y_right = 0.50
+            split_x_ratio = 0.50
+
         line_direction = st.selectbox(
             "Arah Hitung:",
             ["both (Dua Arah)", "down (Masuk/Ke Bawah)", "up (Keluar/Ke Atas)"],
@@ -322,13 +352,34 @@ with tab_video:
                 # Inisialisasi Tracker sesuai pilihan pengguna
                 if "ByteTrack" in tracker_algo:
                     tracker = BYTETracker(track_thresh=0.40, match_thresh=0.80, track_buffer=45, frame_rate=fps_input)
-                    counting_line = ByteCountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
+                    counting_line = ByteCountingLine(
+                        line_y_ratio=line_y_ratio,
+                        line_y_left_ratio=line_y_left,
+                        line_y_right_ratio=line_y_right,
+                        split_x_ratio=split_x_ratio,
+                        mode="split" if is_split else "single",
+                        direction=direction_code
+                    )
                 elif "DeepSORT" in tracker_algo:
                     tracker = DeepSORTTracker(max_cosine_dist=0.35, max_age=40, n_init=3)
-                    counting_line = DeepCountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
+                    counting_line = DeepCountingLine(
+                        line_y_ratio=line_y_ratio,
+                        line_y_left_ratio=line_y_left,
+                        line_y_right_ratio=line_y_right,
+                        split_x_ratio=split_x_ratio,
+                        mode="split" if is_split else "single",
+                        direction=direction_code
+                    )
                 else:
                     tracker = EuclideanDistTracker(max_distance=90, max_disappeared=30)
-                    counting_line = ByteCountingLine(line_y_ratio=line_y_ratio, direction=direction_code)
+                    counting_line = ByteCountingLine(
+                        line_y_ratio=line_y_ratio,
+                        line_y_left_ratio=line_y_left,
+                        line_y_right_ratio=line_y_right,
+                        split_x_ratio=split_x_ratio,
+                        mode="split" if is_split else "single",
+                        direction=direction_code
+                    )
 
                 cap = cv2.VideoCapture(str(input_video_path))
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -391,8 +442,8 @@ with tab_video:
                         else:
                             tracked_objects = tracker.update(detections)
 
-                        # 4. Update Garis Hitung
-                        count_data = counting_line.update(tracked_objects, height_input) if enable_line else {
+                        # 4. Update Garis Hitung (Split-Lane Aware)
+                        count_data = counting_line.update(tracked_objects, height_input, width_input) if enable_line else {
                             'total': tracker.get_total_count(), 'total_in': 0, 'total_out': 0, 'line_y': int(height_input * line_y_ratio),
                             'counted_directions': {}
                         }
@@ -408,7 +459,7 @@ with tab_video:
                         # 6. Gambar visualisasi
                         display_frame = frame.copy()
                         if enable_line:
-                            draw_counting_line(display_frame, count_data['line_y'])
+                            draw_counting_line(display_frame, count_data)
                         draw_byte_tracks(display_frame, tracked_objects, counted_info=count_data.get('counted_directions', {}))
                         draw_byte_hud(
                             display_frame,
