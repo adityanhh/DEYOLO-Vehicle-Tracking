@@ -40,36 +40,45 @@ from deepsort.tracker import DeepSORTTracker, CountingLine as DeepCountingLine
 from tracking.euclidean_tracker import EuclideanDistTracker
 
 # ========================= KONFIGURASI MODEL =========================
+# Berdasarkan Publikasi Jurnal JUTIF (Vol. 6, No. 6, Dec 2025)
+# "Dual Feature Enhancement YOLO: Spatial-Channel Attention Tuning for Vehicle Detection Under Rain Conditions"
+# Penulis: Chalifa Chazar, Aditya Nugraha (Informatika ITENAS)
 MODEL_REGISTRY = {
-    "EXP-05 — DEYOLOn (3x3, r8, Sobel) [Best F1]": {
+    "EXP-05 — DEYOLOn (3x3, r8, Sobel) [⭐ Best F1: 81.34% & Recall: 78.97%]": {
         "path": "weights/exp05_best.pt",
         "dual_input": True,
         "pseudo_ir_method": "sobel",
+        "desc": "Konfigurasi terbaik untuk Vehicle Counting (Recall: 78.97%, F1: 81.34%, mAP50: 87.14%). Memaksimalkan recall deteksi kendaraan saat hujan.",
     },
-    "EXP-07 — DEYOLOn (3x3, r8, CLAHE+Sobel) [Best Precision]": {
+    "EXP-07 — DEYOLOn (3x3, r8, CLAHE+Sobel) [🎯 Best Precision: 85.81%]": {
         "path": "weights/exp07_best.pt",
         "dual_input": True,
         "pseudo_ir_method": "clahe",
+        "desc": "Konfigurasi terbaik untuk Precision (Precision: 85.81%, mAP50: 87.28%, F1: 79.99%). Mengeliminasi false positive akibat pantulan air/aspal basah.",
     },
-    "EXP-02 — DEYOLOn-Default (3x7, r16, Sobel)": {
+    "EXP-02 — DEYOLOn-Default (3x7, r16, Sobel) [Original DEYOLO]": {
         "path": "weights/exp02_best.pt",
         "dual_input": True,
         "pseudo_ir_method": "sobel",
+        "desc": "Arsitektur DEYOLO asli Chen et al. (DEPA kernel 3x7, DECA r=16, Precision: 81.10%, Recall: 76.80%, mAP50: 85.40%, F1: 78.89%).",
     },
-    "EXP-03 — DEYOLOn (3x7, r16, CLAHE)": {
+    "EXP-03 — DEYOLOn (3x7, r8, Sobel) [Stage 1 Ablation]": {
         "path": "weights/exp03_best.pt",
         "dual_input": True,
-        "pseudo_ir_method": "clahe",
+        "pseudo_ir_method": "sobel",
+        "desc": "Ablasi Tahap 1: DEPA 3x7 dengan DECA r=8 (Precision: 75.38%, Recall: 75.84%, mAP50: 82.28%, F1: 75.61%).",
     },
-    "EXP-06 — DEYOLOn (3x3, r16, Sobel)": {
+    "EXP-06 — DEYOLOn (3x3, r4, Sobel) [Stage 2 Ablation]": {
         "path": "weights/exp06_best.pt",
         "dual_input": True,
         "pseudo_ir_method": "sobel",
+        "desc": "Ablasi Tahap 2: DEPA 3x3 dengan DECA r=4 (Precision: 81.57%, Recall: 78.73%, mAP50: 84.92%, F1: 80.12%).",
     },
-    "EXP-01 — Baseline (YOLOv8n)": {
+    "EXP-01 — Baseline (YOLOv8n) [Single-Branch RGB]": {
         "path": "weights/baseline_best.pt",
         "dual_input": False,
         "pseudo_ir_method": None,
+        "desc": "Baseline YOLOv8n standar tanpa modul DEA dan tanpa Pseudo-IR (Precision: 83.25%, Recall: 76.66%, mAP50: 87.37%, F1: 79.82%).",
     },
 }
 
@@ -244,6 +253,7 @@ with tab_image:
         st.subheader("1. Pilih Model")
         img_model_name = st.selectbox("Model Weights:", list(MODEL_REGISTRY.keys()), key="img_model")
         img_model_cfg = MODEL_REGISTRY[img_model_name]
+        st.caption(f"ℹ️ *{img_model_cfg.get('desc', '')}*")
 
         st.subheader("2. Upload Gambar")
         img_file = st.file_uploader("Pilih gambar input (JPG/PNG)", type=["jpg", "jpeg", "png"], key="img_upload")
@@ -325,6 +335,7 @@ with tab_video:
         st.subheader("1. Pilih Model & Algoritma Tracking")
         vid_model_name = st.selectbox("Model Weights:", list(MODEL_REGISTRY.keys()), key="vid_model")
         vid_model_cfg = MODEL_REGISTRY[vid_model_name]
+        st.caption(f"ℹ️ *{vid_model_cfg.get('desc', '')}*")
 
         tracker_algo = st.selectbox(
             "Algoritma Tracking:",

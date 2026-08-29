@@ -112,16 +112,19 @@ DEYOLO Testing App/
 
 ---
 
-## 🏋️ Trained Model Weights Registry
+## 🏋️ Trained Model Weights Registry & Benchmark (JUTIF 2025)
 
-| Model Name | Weight Path | Dual Input | Pseudo-IR Method | Remarks |
-| :--- | :--- | :---: | :---: | :--- |
-| **EXP-05 — DEYOLOn (3x3, r8, Sobel)** | `weights/exp05_best.pt` | **Yes** | `sobel` | ⭐ **Best Overall F1-Score** for rain conditions |
-| **EXP-07 — DEYOLOn (3x3, r8, CLAHE+Sobel)** | `weights/exp07_best.pt` | **Yes** | `clahe` | ⭐ **Best Precision** under low-light/night rain |
-| **EXP-02 — DEYOLOn-Default (3x7, r16, Sobel)**| `weights/exp02_best.pt` | **Yes** | `sobel` | Standard DEYOLO benchmark baseline |
-| **EXP-03 — DEYOLOn (3x7, r16, CLAHE)** | `weights/exp03_best.pt` | **Yes** | `clahe` | Histogram-equalized edge enhancement |
-| **EXP-06 — DEYOLOn (3x3, r16, Sobel)** | `weights/exp06_best.pt` | **Yes** | `sobel` | High-reduction ratio Sobel model |
-| **EXP-01 — Baseline (YOLOv8n)** | `weights/baseline_best.pt`| **No** | *None* | Standard Single-RGB YOLOv8n control baseline |
+Evaluation results from the published journal paper (*Chazar & Nugraha, JUTIF 2025*):
+
+| Experiment | Model Architecture | DEPA Kernel | DECA Reduction ($r$) | Pseudo-IR Method | Precision | Recall | mAP@0.5 | F1-Score | Remarks |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **EXP-05** | **DEYOLOn** | **3×3** | **8** | **Sobel Edge** | 83.86% | **78.97%** | 87.14% | **81.34%** | ⭐ **Best F1 & Recall** (+2.31% Recall gain, optimal for Traffic Counting) |
+| **EXP-07** | **DEYOLOn** | **3×3** | **8** | **Sobel + CLAHE**| **85.81%** | 74.92% | 87.28% | 79.99% | 🎯 **Best Precision** (+2.56% gain, best for wet-asphalt reflection suppression) |
+| **EXP-04** | DEYOLOn | 3×3 | 16 | Sobel Edge | 83.36% | 78.44% | 86.69% | 80.84% | Balanced symmetric kernel configuration |
+| **EXP-02** | DEYOLOn-Default | 3×7 | 16 | Sobel Edge | 81.10% | 76.80% | 85.40% | 78.89% | Original DEYOLO architecture baseline |
+| **EXP-06** | DEYOLOn | 3×3 | 4 | Sobel Edge | 81.57% | 78.73% | 84.92% | 80.12% | High channel capacity ablation ($r=4$) |
+| **EXP-03** | DEYOLOn | 3×7 | 8 | Sobel Edge | 75.38% | 75.84% | 82.28% | 75.61% | Asymmetric kernel with wide channel ($r=8$) |
+| **EXP-01** | Baseline (YOLOv8n) | — | — | *None* (Single RGB)| 83.25% | 76.66% | **87.37%** | 79.82% | Standard single-branch RGB baseline |
 
 ---
 
@@ -270,23 +273,31 @@ To prevent duplicate counts and handle asymmetric perspective angles in highway 
 
 ---
 
-## 📜 Credits & References
+## 📜 Scientific Publication & Citation
 
-Special thanks to the authors and open-source contributors of the following foundations:
+If you find this work or model configurations helpful in your research, please cite our published journal paper:
 
-1. **DEYOLO (Dual-Enhanced YOLO):**
-   * Architecture design and dual-input RGB/Pseudo-IR fusion for adverse weather object detection.
-   * Reference Repository: [chips96/DEYOLO](https://github.com/chips96/DEYOLO)
-2. **Ultralytics YOLOv8:**
-   * Jocher, G., Chaurasia, A., & Qiu, J. (2023). *Ultralytics YOLOv8*. [GitHub Repository](https://github.com/ultralytics/ultralytics)
-3. **ByteTrack:**
-   * Zhang, Y., Sun, P., Jiang, Y., Yu, D., Weng, F., Yuan, Z., Luo, P., Liu, W., & Wang, X. (2022). *ByteTrack: Multi-Object Tracking by Associating Every Detection Box*. European Conference on Computer Vision (ECCV 2022).
-4. **DeepSORT:**
-   * Wojke, N., Bewley, A., & Paulus, D. (2017). *Simple Online and Realtime Tracking with a Deep Association Metric*. IEEE International Conference on Image Processing (ICIP 2017).
+```bibtex
+@article{chazar2025dual,
+  title     = {Dual Feature Enhancement YOLO: Spatial-Channel Attention Tuning for Vehicle Detection Under Rain Conditions},
+  author    = {Chazar, Chalifa and Nugraha, Aditya},
+  journal   = {Jurnal Teknik Informatika (JUTIF)},
+  volume    = {6},
+  number    = {6},
+  pages     = {1530--1537},
+  year      = {2025},
+  month     = {December},
+  doi       = {10.52436/1.jutif.6.6.3540},
+  url       = {https://doi.org/10.52436/1.jutif.6.6.3540},
+  publisher = {Department of Informatics, Universitas Jenderal Soedirman}
+}
+```
 
 ---
 
-## 👤 Author & Academic Context
-* **Project:** (Undergraduate Thesis Research)
-* **Author:** Aditya ([@adityanhh](https://github.com/adityanhh))
-* **Domain:** Computer Vision, Deep Learning, Intelligent Transportation Systems (ITS)
+## 👥 Authors & Academic Context
+* **Authors:** 
+  * **Aditya Nugraha** ([@adityanhh](https://github.com/adityanhh))
+  * **Chalifa Chazar** (`chalifa@itenas.ac.id`)
+* **Institution:** Department of Informatics, Institut Teknologi Nasional (ITENAS) Bandung, Indonesia
+* **Domain:** Computer Vision, Deep Learning, Intelligent Transportation Systems (ITS), Multi-Object Tracking (MOT) Under Adverse Weather
