@@ -106,28 +106,37 @@ def get_exact_video_fps(video_path):
             cmd = [
                 ffprobe_cmd, "-v", "error",
                 "-select_streams", "v:0",
-                "-show_entries", "stream=r_frame_rate,avg_frame_rate",
+                "-show_entries", "stream=r_frame_rate,avg_frame_rate,nb_frames:format=duration",
                 "-of", "json",
                 str(video_path)
             ]
             out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL)
             info = json.loads(out.decode("utf-8"))
             stream = info.get("streams", [{}])[0]
-            for key in ["avg_frame_rate", "r_frame_rate"]:
+            fmt = info.get("format", {})
+
+            for key in ["r_frame_rate", "avg_frame_rate"]:
                 val = stream.get(key, "")
                 if "/" in val:
                     num, den = val.split("/")
                     if float(den) > 0:
                         fps = float(num) / float(den)
-                        if 5.0 <= fps <= 120.0:
+                        if 0.5 <= fps <= 240.0:
                             return round(fps, 2)
+
+            nb = stream.get("nb_frames", "")
+            dur = fmt.get("duration", "")
+            if nb and dur and float(dur) > 0:
+                fps = float(nb) / float(dur)
+                if 0.5 <= fps <= 240.0:
+                    return round(fps, 2)
         except Exception:
             pass
 
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS)
     cap.release()
-    if fps and 5.0 <= fps <= 120.0:
+    if fps and 0.5 <= fps <= 240.0:
         return round(float(fps), 2)
     return 30.0
 
@@ -325,7 +334,7 @@ with col_main:
         duration_sec = total_frames / fps_input if fps_input > 0 else 0
         cap_info.release()
 
-        target_playback_fps = max(5.0, min(60.0, (fps_input / frame_stride) * speed_mult))
+        target_playback_fps = max(1.0, min(60.0, (fps_input / frame_stride) * speed_mult))
         output_duration_sec = (total_frames / frame_stride) / target_playback_fps if target_playback_fps > 0 else 0
 
         dur_in_m = int(duration_sec // 60)
