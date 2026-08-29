@@ -286,14 +286,21 @@ def run_bytetrack():
     prev_time = time.time()
     fps_smooth = fps_input
     paused = False
+    consecutive_empty = 0
+    max_consecutive_empty = 60
 
     try:
         while cap.isOpened():
             if not paused:
                 ret, frame = cap.read()
-                if not ret:
-                    break
+                if not ret or frame is None:
+                    consecutive_empty += 1
+                    if consecutive_empty > max_consecutive_empty or (total_frames > 0 and frame_idx >= total_frames):
+                        break
+                    frame_idx += 1
+                    continue
 
+                consecutive_empty = 0
                 frame_idx += 1
 
                 # 1. Inferensi Model

@@ -421,9 +421,9 @@ with tab_video:
             raw_output_path = temp_dir / f"tracked_raw_{vid_file.name}.mp4"
             h264_output_path = temp_dir / f"tracked_{vid_file.name}.mp4"
 
-            if not input_video_path.exists() or input_video_path.stat().st_size != vid_file.size:
-                with open(input_video_path, "wb") as f:
-                    f.write(vid_file.getbuffer())
+            # Selalu tulis buffer terbaru agar file utuh dan tidak terpotong
+            with open(input_video_path, "wb") as f:
+                f.write(vid_file.getbuffer())
 
             cap_info = cv2.VideoCapture(str(input_video_path))
             total_frames = int(cap_info.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -435,11 +435,17 @@ with tab_video:
             cap_info.release()
 
             target_playback_fps = max(5.0, min(60.0, (fps_input / frame_stride) * speed_mult))
+            output_duration_sec = (total_frames / frame_stride) / target_playback_fps if target_playback_fps > 0 else 0
+
+            dur_in_m = int(duration_sec // 60)
+            dur_in_s = int(duration_sec % 60)
+            dur_out_m = int(output_duration_sec // 60)
+            dur_out_s = int(output_duration_sec % 60)
 
             st.info(
                 f"📹 **Info Video**: `{vid_file.name}` | Resolusi: `{width_input}x{height_input}` | "
-                f"FPS Asli: `{fps_input:.1f}` | Total: `{total_frames}` frame (~`{duration_sec/60:.1f}` menit) | "
-                f"Kecepatan Output: `{target_playback_fps:.1f} FPS ({playback_speed.split(' ')[0]})`"
+                f"FPS Asli: `{fps_input:.1f}` | Total: `{total_frames}` frame (Durasi Asli: `{dur_in_m:02d}:{dur_in_s:02d}`) | "
+                f"Kecepatan Output: `{target_playback_fps:.1f} FPS` (Estimasi Durasi Video Hasil: `{dur_out_m:02d}:{dur_out_s:02d}`)"
             )
 
             if vid_run_btn:
@@ -502,6 +508,8 @@ with tab_video:
 
                 frame_idx = 0
                 processed_count = 0
+                consecutive_empty = 0
+                max_consecutive_empty = 60  # Toleransi pemulihan jika ada frame glitch/corrupt di video
                 start_time = time.time()
                 prev_time = time.time()
                 fps_smooth = fps_input
@@ -512,9 +520,16 @@ with tab_video:
                 try:
                     while cap.isOpened():
                         ret, frame = cap.read()
-                        if not ret:
-                            break
+                        if not ret or frame is None:
+                            consecutive_empty += 1
+                            if consecutive_empty > max_consecutive_empty or (total_frames > 0 and frame_idx >= total_frames):
+                                # Benar-benar End of File
+                                break
+                            # Lewati frame glitch dan lanjutkan membaca frame berikutnya
+                            frame_idx += 1
+                            continue
 
+                        consecutive_empty = 0
                         frame_idx += 1
                         if frame_stride > 1 and (frame_idx % frame_stride != 0):
                             continue
