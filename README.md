@@ -250,6 +250,9 @@ To prevent duplicate counts and handle asymmetric perspective angles in highway 
   * **Right Lane (IN / Downwards):** Configured at $Y = 0.50$ (mid-screen).
 * **Bounding Box Span & Vector Verification:** Combines centroid trajectory with vertical bounding box interval $[y_1, y_2] \cap [Y_{\text{line}} - \delta, Y_{\text{line}} + \delta]$ and motion vector sign ($\text{sgn}(v_y)$), guaranteeing zero missed counts even with fast vehicles or rain fog.
 * **Strict ID Retention:** Track IDs are preserved from video entry to exit (`ID: 5 car [OUT] 0.88`), guaranteeing **0% double-counting** and **0% ID switching**.
+* **Automated CSV Data Logging & Portable ZIP Export:**
+  * Every vehicle crossing is logged with granular attributes: `No`, `Track_ID`, `Kelas_Kendaraan`, `Arah` (IN/OUT), `Lajur`, `Frame_Ke`, `Waktu_Video` (mm:ss.s), `Detik`, coordinates $(cx, cy)$, and Bounding Box dimensions $(w, h)$.
+  * One-click download generates a complete `.ZIP` package containing the H.264 tracked video (`.mp4`), detailed CSV logs (`.csv`), summary reports (`.csv`), and execution metadata (`.txt`).
 
 ---
 

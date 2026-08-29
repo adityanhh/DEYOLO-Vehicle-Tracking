@@ -459,11 +459,13 @@ class CountingLine:
         self.counted_ids = set()
         self.counted_directions = {}  # id -> 'IN' / 'OUT'
         self.class_counts = {}
+        self.counting_events = []
 
-    def update(self, tracked_objects, frame_height, frame_width=None):
+    def update(self, tracked_objects, frame_height, frame_width=None, frame_idx=0, fps=30.0):
         """
         Evaluasi apakah objek melintasi garis hitung pada frame ini.
         Mendukung Split-Lane (Lajur Kiri OUT vs Lajur Kanan IN) serta Bbox-Span.
+        Mencatat setiap event crossing ke dalam log terstruktur untuk export CSV.
         """
         if frame_width is None:
             frame_width = int(frame_height * (16 / 9))
@@ -505,6 +507,25 @@ class CountingLine:
                             cls_k = str(cls_name)
                             self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
 
+                            time_sec = frame_idx / fps if fps > 0 else 0.0
+                            mins = int(time_sec // 60)
+                            secs = int(time_sec % 60)
+                            msec = int((time_sec * 10) % 10)
+                            self.counting_events.append({
+                                'No': len(self.counting_events) + 1,
+                                'Track_ID': obj_id,
+                                'Kelas_Kendaraan': cls_k,
+                                'Arah': 'OUT (Keluar/Ke Atas)',
+                                'Lajur': 'Lajur Kiri (OUT)',
+                                'Frame_Ke': frame_idx,
+                                'Waktu_Video': f"{mins:02d}:{secs:02d}.{msec:01d}",
+                                'Detik': round(time_sec, 2),
+                                'Posisi_X': int(curr_cx),
+                                'Posisi_Y': int(curr_cy),
+                                'Lebar_BBox_Px': int(x2 - x1),
+                                'Tinggi_BBox_Px': int(y2 - y1),
+                            })
+
                     else:
                         # ==================== LAJUR KANAN: ARAH IN (KE BAWAH) ====================
                         target_y = line_y_right
@@ -518,6 +539,25 @@ class CountingLine:
                             cls_k = str(cls_name)
                             self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
 
+                            time_sec = frame_idx / fps if fps > 0 else 0.0
+                            mins = int(time_sec // 60)
+                            secs = int(time_sec % 60)
+                            msec = int((time_sec * 10) % 10)
+                            self.counting_events.append({
+                                'No': len(self.counting_events) + 1,
+                                'Track_ID': obj_id,
+                                'Kelas_Kendaraan': cls_k,
+                                'Arah': 'IN (Masuk/Ke Bawah)',
+                                'Lajur': 'Lajur Kanan (IN)',
+                                'Frame_Ke': frame_idx,
+                                'Waktu_Video': f"{mins:02d}:{secs:02d}.{msec:01d}",
+                                'Detik': round(time_sec, 2),
+                                'Posisi_X': int(curr_cx),
+                                'Posisi_Y': int(curr_cy),
+                                'Lebar_BBox_Px': int(x2 - x1),
+                                'Tinggi_BBox_Px': int(y2 - y1),
+                            })
+
                 else:
                     # ==================== SINGLE LINE MODE ====================
                     target_y = line_y_single
@@ -530,6 +570,25 @@ class CountingLine:
                             cls_k = str(cls_name)
                             self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
 
+                            time_sec = frame_idx / fps if fps > 0 else 0.0
+                            mins = int(time_sec // 60)
+                            secs = int(time_sec % 60)
+                            msec = int((time_sec * 10) % 10)
+                            self.counting_events.append({
+                                'No': len(self.counting_events) + 1,
+                                'Track_ID': obj_id,
+                                'Kelas_Kendaraan': cls_k,
+                                'Arah': 'IN (Masuk/Ke Bawah)',
+                                'Lajur': 'Garis Tunggal',
+                                'Frame_Ke': frame_idx,
+                                'Waktu_Video': f"{mins:02d}:{secs:02d}.{msec:01d}",
+                                'Detik': round(time_sec, 2),
+                                'Posisi_X': int(curr_cx),
+                                'Posisi_Y': int(curr_cy),
+                                'Lebar_BBox_Px': int(x2 - x1),
+                                'Tinggi_BBox_Px': int(y2 - y1),
+                            })
+
                     # Melintas ke atas (Up / Out)
                     elif prev_cy > target_y >= curr_cy or (dy < 0 and y1 <= target_y <= y2 and prev_cy >= target_y - 15):
                         if self.direction in ["up", "both"]:
@@ -538,6 +597,25 @@ class CountingLine:
                             self.counted_directions[obj_id] = "OUT"
                             cls_k = str(cls_name)
                             self.class_counts[cls_k] = self.class_counts.get(cls_k, 0) + 1
+
+                            time_sec = frame_idx / fps if fps > 0 else 0.0
+                            mins = int(time_sec // 60)
+                            secs = int(time_sec % 60)
+                            msec = int((time_sec * 10) % 10)
+                            self.counting_events.append({
+                                'No': len(self.counting_events) + 1,
+                                'Track_ID': obj_id,
+                                'Kelas_Kendaraan': cls_k,
+                                'Arah': 'OUT (Keluar/Ke Atas)',
+                                'Lajur': 'Garis Tunggal',
+                                'Frame_Ke': frame_idx,
+                                'Waktu_Video': f"{mins:02d}:{secs:02d}.{msec:01d}",
+                                'Detik': round(time_sec, 2),
+                                'Posisi_X': int(curr_cx),
+                                'Posisi_Y': int(curr_cy),
+                                'Lebar_BBox_Px': int(x2 - x1),
+                                'Tinggi_BBox_Px': int(y2 - y1),
+                            })
 
         return {
             'total_in': self.total_in,
@@ -550,8 +628,44 @@ class CountingLine:
             'split_x': split_x,
             'mode': self.mode,
             'counted_ids': set(self.counted_ids),
-            'counted_directions': dict(self.counted_directions)
+            'counted_directions': dict(self.counted_directions),
+            'events_count': len(self.counting_events)
         }
+
+    def get_events_dataframe(self):
+        """Mengembalikan log seluruh kendaraan yang melintasi garis dalam bentuk pandas DataFrame."""
+        import pandas as pd
+        if not self.counting_events:
+            return pd.DataFrame(columns=[
+                'No', 'Track_ID', 'Kelas_Kendaraan', 'Arah', 'Lajur',
+                'Frame_Ke', 'Waktu_Video', 'Detik', 'Posisi_X', 'Posisi_Y',
+                'Lebar_BBox_Px', 'Tinggi_BBox_Px'
+            ])
+        return pd.DataFrame(self.counting_events)
+
+    def get_summary_dataframe(self):
+        """Mengembalikan tabel ringkasan statistik per kelas dan total arah dalam pandas DataFrame."""
+        import pandas as pd
+        summary_rows = [
+            {'Metrik': 'Total Kendaraan Terhitung (Bebas Duplikat)', 'Nilai': self.total_in + self.total_out},
+            {'Metrik': 'Arah Masuk (IN / Ke Bawah)', 'Nilai': self.total_in},
+            {'Metrik': 'Arah Keluar (OUT / Ke Atas)', 'Nilai': self.total_out},
+        ]
+        for cls_name, count in sorted(self.class_counts.items()):
+            summary_rows.append({'Metrik': f"Kelas: {cls_name}", 'Nilai': count})
+        return pd.DataFrame(summary_rows)
+
+    def export_csv(self, filepath):
+        """Simpan data log kendaraan ke file CSV."""
+        df = self.get_events_dataframe()
+        df.to_csv(filepath, index=False, encoding='utf-8')
+        return filepath
+
+    def export_summary_csv(self, filepath):
+        """Simpan ringkasan ke file CSV."""
+        df = self.get_summary_dataframe()
+        df.to_csv(filepath, index=False, encoding='utf-8')
+        return filepath
 
     def reset(self):
         self.total_in = 0
@@ -559,3 +673,4 @@ class CountingLine:
         self.counted_ids.clear()
         self.counted_directions.clear()
         self.class_counts.clear()
+        self.counting_events.clear()

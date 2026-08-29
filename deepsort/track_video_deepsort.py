@@ -320,8 +320,8 @@ def run_deepsort():
                 # 3. Update DeepSORT
                 tracked_objects = tracker.update(frame, detections)
 
-                # 4. Update Counting Line (Split-Lane Aware)
-                count_data = counting_line.update(tracked_objects, height, width)
+                # 4. Update Counting Line (Split-Lane Aware) dengan pencatatan frame & timestamp
+                count_data = counting_line.update(tracked_objects, height, width, frame_idx=frame_idx, fps=fps)
 
                 # 5. Hitung FPS aktual
                 curr_time = time.time()
@@ -395,7 +395,14 @@ def run_deepsort():
         print(f"    - {cls_name:15s}: {count} unit")
 
     if not args.no_save:
-        print(f"• Video Tersimpan Di   : {Path(args.output).resolve()}")
+        output_p = Path(args.output).resolve()
+        csv_p = output_p.with_name(f"{output_p.stem}_log.csv")
+        csv_sum_p = output_p.with_name(f"{output_p.stem}_summary.csv")
+        counting_line.export_csv(str(csv_p))
+        counting_line.export_summary_csv(str(csv_sum_p))
+        print(f"• Video Tersimpan Di   : {output_p}")
+        print(f"• Log CSV Tersimpan Di : {csv_p}")
+        print(f"• Ringkasan CSV Di     : {csv_sum_p}")
     print("=" * 65)
 
 

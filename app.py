@@ -189,6 +189,30 @@ def convert_to_h264(input_video_path, output_video_path, fps=30.0):
     return False
 
 
+def create_result_zip(video_path, csv_log_path=None, csv_summary_path=None, metadata_text=""):
+    """
+    Membuat file ZIP in-memory (bytes) yang berisi:
+    1. Video hasil tracking (.mp4)
+    2. Log detail setiap kendaraan (.csv)
+    3. Ringkasan statistik (.csv)
+    4. Info pengujian & metadata (.txt)
+    """
+    import io
+    import zipfile
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        if video_path and os.path.exists(str(video_path)):
+            zf.write(str(video_path), arcname=f"video_{Path(video_path).name}")
+        if csv_log_path and os.path.exists(str(csv_log_path)):
+            zf.write(str(csv_log_path), arcname=f"data_log_kendaraan_{Path(csv_log_path).name}")
+        if csv_summary_path and os.path.exists(str(csv_summary_path)):
+            zf.write(str(csv_summary_path), arcname=f"ringkasan_{Path(csv_summary_path).name}")
+        if metadata_text:
+            zf.writestr("info_pengujian.txt", metadata_text)
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+
 # ========================= STREAMLIT UI =========================
 st.set_page_config(
     page_title="DEYOLO Vehicle Detection & Tracking",
@@ -520,10 +544,16 @@ with tab_video:
                         else:
                             tracked_objects = tracker.update(detections)
 
-                        # 4. Update Garis Hitung (Split-Lane Aware)
-                        count_data = counting_line.update(tracked_objects, height_input, width_input) if enable_line else {
+                        # 4. Update Garis Hitung (Split-Lane Aware) dengan pencatatan frame & timestamp
+                        count_data = counting_line.update(
+                            tracked_objects,
+                            height_input,
+                            width_input,
+                            frame_idx=frame_idx,
+                            fps=fps_input
+                        ) if enable_line else {
                             'total': tracker.get_total_count(), 'total_in': 0, 'total_out': 0, 'line_y': int(height_input * line_y_ratio),
-                            'counted_directions': {}
+                            'counted_directions': {}, 'events_count': 0
                         }
 
                         # 5. Hitung FPS
@@ -586,6 +616,49 @@ with tab_video:
                     is_converted = convert_to_h264(raw_output_path, h264_output_path, fps=target_playback_fps)
                     final_playback_path = h264_output_path if is_converted and h264_output_path.exists() else raw_output_path
 
+                # ==================== EKSPOR DATA CSV & ZIP ====================
+                csv_log_path = temp_dir / f"vehicle_log_{Path(vid_file.name).stem}.csv"
+                csv_summary_path = temp_dir / f"vehicle_summary_{Path(vid_file.name).stem}.csv"
+
+                if enable_line:
+                    df_events = counting_line.get_events_dataframe()
+                    df_summary = counting_line.get_summary_dataframe()
+                    counting_line.export_csv(str(csv_log_path))
+                    counting_line.export_summary_csv(str(csv_summary_path))
+                else:
+                    import pandas as pd
+                    df_events = pd.DataFrame()
+                    df_summary = pd.DataFrame([
+                        {'Metrik': 'Total ID Terdaftar', 'Nilai': tracker.get_total_count()}
+                    ])
+                    df_summary.to_csv(str(csv_summary_path), index=False)
+
+                metadata_text = f"""DEYOLO Vehicle Tracking & Counting Report
+=====================================================
+Nama File Video       : {vid_file.name}
+Resolusi Video        : {width_input}x{height_input}
+FPS Video Asli        : {fps_input:.2f}
+Target FPS Playback   : {target_playback_fps:.2f}
+Total Frame Video     : {total_frames} frame
+Algoritma Tracker     : {tracker_algo}
+Model Deteksi         : {Path(vid_model_cfg["path"]).name}
+Mode Garis Hitung     : {'Split-Lane (Dual Tripwire)' if is_split else 'Single Line'}
+Total Kendaraan Masuk : {count_data.get('total_in', 0)} unit
+Total Kendaraan Keluar: {count_data.get('total_out', 0)} unit
+Total Keseluruhan     : {count_data.get('total', 0)} unit
+Waktu Eksekusi        : {total_elapsed:.1f} detik
+Tanggal Pengujian     : {time.strftime('%Y-%m-%d %H:%M:%S')}
+=====================================================
+"""
+
+                zip_bytes = create_result_zip(
+                    video_path=final_playback_path,
+                    csv_log_path=csv_log_path if csv_log_path.exists() else None,
+                    csv_summary_path=csv_summary_path if csv_summary_path.exists() else None,
+                    metadata_text=metadata_text
+                )
+
+                # Player Video
                 st.subheader("🎬 Hasil Pelacakan Video")
                 try:
                     with open(final_playback_path, "rb") as vid_bytes:
@@ -593,17 +666,44 @@ with tab_video:
                 except Exception:
                     st.warning("Video tidak dapat diputar otomatis, namun dapat diunduh melalui tombol di bawah.")
 
-                with open(final_playback_path, "rb") as vid_file_data:
+                # Panel Download ZIP & File Terpisah
+                st.subheader("📦 Download Hasil Pengujian (Video & CSV)")
+                col_d1, col_d2, col_d3 = st.columns([1.6, 1.2, 1.2])
+
+                with col_d1:
                     st.download_button(
-                        label="📥 Download Video Hasil Tracking (.mp4)",
-                        data=vid_file_data,
-                        file_name=f"tracked_{vid_file.name}",
-                        mime="video/mp4",
+                        label="📦 Download Paket Lengkap (.ZIP: Video + CSV Log)",
+                        data=zip_bytes,
+                        file_name=f"paket_hasil_tracking_{Path(vid_file.name).stem}.zip",
+                        mime="application/zip",
                         type="primary",
-                        use_container_width=True
+                        use_container_width=True,
+                        help="Berisi file video MP4, data log detail kendaraan per frame (CSV), ringkasan statistik (CSV), dan info metadata."
                     )
 
-                st.subheader("📊 Statistik Kendaraan Unik (Bebas Duplikat)")
+                with col_d2:
+                    with open(final_playback_path, "rb") as vid_file_data:
+                        st.download_button(
+                            label="🎬 Download Video Saja (.mp4)",
+                            data=vid_file_data,
+                            file_name=f"tracked_{vid_file.name}",
+                            mime="video/mp4",
+                            use_container_width=True
+                        )
+
+                with col_d3:
+                    if enable_line and csv_log_path.exists():
+                        with open(csv_log_path, "rb") as f_csv:
+                            st.download_button(
+                                label="📊 Download Log CSV Saja (.csv)",
+                                data=f_csv,
+                                file_name=f"vehicle_log_{Path(vid_file.name).stem}.csv",
+                                mime="text/csv",
+                                use_container_width=True
+                            )
+
+                # Statistik Kendaraan
+                st.subheader("📊 Ringkasan Statistik Kendaraan (Bebas Duplikat)")
                 s1, s2 = st.columns([1, 1])
                 with s1:
                     st.metric("Total Melintasi Garis (Bebas Duplikat)", count_data.get('total', 0))
@@ -619,5 +719,11 @@ with tab_video:
                         st.markdown(md_c)
                     else:
                         st.write("Tidak ada kendaraan yang terdeteksi.")
+
+                # Tabel Log Detail Kendaraan
+                if enable_line and not df_events.empty:
+                    st.subheader(f"📋 Tabel Log Data Kendaraan Terhitung ({len(df_events)} Unit)")
+                    st.caption("Data berikut tercatat otomatis saat kendaraan melintasi garis hitung virtual:")
+                    st.dataframe(df_events, use_container_width=True, hide_index=True)
         else:
             st.info("👈 Upload file video di panel kiri untuk mulai pelacakan.")
